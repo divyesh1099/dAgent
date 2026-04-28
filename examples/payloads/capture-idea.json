@@ -1,0 +1,8 @@
+{
+  "source": "apple_watch",
+  "intent": "capture_idea",
+  "task": "Look into a cheap reliable OCR pipeline for receipt scanning.",
+  "input_type": "voice",
+  "idempotency_key": "example-capture-idea-001"
+}
+

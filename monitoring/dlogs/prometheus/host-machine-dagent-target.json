@@ -1,0 +1,13 @@
+[
+  {
+    "targets": [
+      "host.docker.internal:8765"
+    ],
+    "labels": {
+      "source": "host",
+      "app": "dagent",
+      "worker": "main"
+    }
+  }
+]
+

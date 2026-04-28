@@ -1,0 +1,10 @@
+{
+  "source": "apple_watch",
+  "intent": "codex_task",
+  "repo": "dagent",
+  "task": "Add tests for approval-required jobs and run the worker test suite.",
+  "input_type": "voice",
+  "require_approval": true,
+  "idempotency_key": "example-codex-task-001"
+}
+

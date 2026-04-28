@@ -1,0 +1,376 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+USER_UNIT_DIR="$XDG_CONFIG_HOME/systemd/user"
+WORKER_ENV_DIR="$XDG_CONFIG_HOME/dagent/workers"
+UNIT_TEMPLATE="$ROOT/services/systemd/dagent-worker@.service"
+UNIT_PATH="$USER_UNIT_DIR/dagent-worker@.service"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  scripts/dagentctl up [name] [port]        Create, install, enable, and start a worker
+  scripts/dagentctl init [name] [port]      Create a worker env file
+  scripts/dagentctl install                 Install/update the systemd user unit
+  scripts/dagentctl boot                    Enable user services at PC boot
+  scripts/dagentctl start [name]            Start a worker
+  scripts/dagentctl stop [name]             Stop a worker
+  scripts/dagentctl restart [name]          Restart a worker
+  scripts/dagentctl enable [name]           Start this worker automatically
+  scripts/dagentctl disable [name]          Stop automatic startup
+  scripts/dagentctl status [name]           Show systemd status
+  scripts/dagentctl logs [name]             Follow logs
+  scripts/dagentctl list                    List all dAgent worker units
+  scripts/dagentctl health [name]           Check /health and /ready
+  scripts/dagentctl metrics [name]          Show Prometheus metrics
+  scripts/dagentctl overview                Show all workers with health checks
+  scripts/dagentctl dlogs-targets           Print Prometheus file_sd targets for dLogs
+  scripts/dagentctl jobs [name] [limit]     Show recent jobs
+  scripts/dagentctl token [name]            Print the worker API token
+  scripts/dagentctl env [name]              Print the env file path
+  scripts/dagentctl doctor                  Check local prerequisites
+
+Defaults:
+  name: main
+  port: 8765
+EOF
+}
+
+main() {
+  local command="${1:-help}"
+  shift || true
+
+  case "$command" in
+    up) cmd_up "${1:-main}" "${2:-8765}" ;;
+    init|new|add) cmd_init "${1:-main}" "${2:-8765}" ;;
+    install) cmd_install ;;
+    boot) cmd_boot ;;
+    start) systemctl_user start "$(unit "${1:-main}")" ;;
+    stop) systemctl_user stop "$(unit "${1:-main}")" ;;
+    restart) systemctl_user restart "$(unit "${1:-main}")" ;;
+    enable) systemctl_user enable "$(unit "${1:-main}")" ;;
+    disable) systemctl_user disable "$(unit "${1:-main}")" ;;
+    status) systemctl_user status "$(unit "${1:-main}")" --no-pager ;;
+    logs) journalctl --user -u "$(unit "${1:-main}")" -f ;;
+    list) systemctl_user list-units 'dagent-worker@*.service' --all --no-pager ;;
+    health) cmd_health "${1:-main}" ;;
+    metrics) cmd_metrics "${1:-main}" ;;
+    overview) cmd_overview ;;
+    dlogs-targets) cmd_dlogs_targets ;;
+    jobs) cmd_jobs "${1:-main}" "${2:-20}" ;;
+    token) cmd_token "${1:-main}" ;;
+    env) echo "$(env_file "${1:-main}")" ;;
+    doctor) cmd_doctor ;;
+    help|-h|--help) usage ;;
+    *) usage; exit 2 ;;
+  esac
+}
+
+cmd_up() {
+  local name="$1"
+  local port="$2"
+
+  if [[ ! -f "$(env_file "$name")" ]]; then
+    cmd_init "$name" "$port"
+  fi
+
+  cmd_install
+  systemctl_user enable "$(unit "$name")"
+  systemctl_user restart "$(unit "$name")"
+  echo "Started $(unit "$name")."
+  echo "Worker URL: http://127.0.0.1:$(worker_port "$name")"
+  echo "Token: scripts/dagentctl token $name"
+}
+
+cmd_init() {
+  local name="$1"
+  local port="$2"
+  validate_name "$name"
+  mkdir -p "$WORKER_ENV_DIR"
+
+  local file
+  file="$(env_file "$name")"
+  if [[ -f "$file" ]]; then
+    echo "Worker env already exists: $file"
+    return 0
+  fi
+
+  local token
+  token="$(random_hex 32)"
+
+  umask 077
+  cat >"$file" <<EOF
+DAGENT_WORKER_NAME=$name
+DAGENT_WORKER_HOST=127.0.0.1
+DAGENT_WORKER_PORT=$port
+DAGENT_WORKER_CONFIG=$ROOT/worker/config.yml
+DAGENT_WORKER_API_TOKEN=$token
+DAGENT_WORKER_HMAC_SECRET=
+DAGENT_DATA_DIR=$ROOT/.data/worker-$name
+EOF
+
+  echo "Created worker env: $file"
+  echo "Use this token in n8n:"
+  echo "$token"
+}
+
+cmd_install() {
+  require_command systemctl
+  require_command python3
+  ensure_venv
+
+  mkdir -p "$USER_UNIT_DIR"
+
+  local escaped_root
+  escaped_root="${ROOT//&/\\&}"
+  sed "s|{{DAGENT_ROOT}}|$escaped_root|g" "$UNIT_TEMPLATE" >"$UNIT_PATH"
+
+  systemctl_user daemon-reload
+  echo "Installed user service template: $UNIT_PATH"
+}
+
+cmd_boot() {
+  require_command loginctl
+
+  if loginctl show-user "$USER" -p Linger --value 2>/dev/null | grep -qx yes; then
+    echo "Linger is already enabled for $USER. User services can start at boot."
+    return 0
+  fi
+
+  if loginctl enable-linger "$USER"; then
+    echo "Enabled linger for $USER. User services can start at boot."
+  else
+    echo "Could not enable linger automatically."
+    echo "Run this once:"
+    echo "  sudo loginctl enable-linger $USER"
+    exit 1
+  fi
+}
+
+cmd_health() {
+  local name="$1"
+  load_worker_env "$name"
+  local url="http://${DAGENT_WORKER_HOST}:${DAGENT_WORKER_PORT}"
+
+  curl -fsS "$url/health"
+  echo
+  curl -fsS -H "Authorization: Bearer $DAGENT_WORKER_API_TOKEN" "$url/ready"
+  echo
+}
+
+cmd_jobs() {
+  local name="$1"
+  local limit="$2"
+  load_worker_env "$name"
+  local url="http://${DAGENT_WORKER_HOST}:${DAGENT_WORKER_PORT}"
+
+  curl -fsS -H "Authorization: Bearer $DAGENT_WORKER_API_TOKEN" "$url/v1/jobs?limit=$limit"
+  echo
+}
+
+cmd_metrics() {
+  local name="$1"
+  load_worker_env "$name"
+  local url="http://${DAGENT_WORKER_HOST}:${DAGENT_WORKER_PORT}"
+
+  curl -fsS "$url/metrics"
+}
+
+cmd_overview() {
+  echo "dAgent workers"
+  echo
+  systemctl_user list-units 'dagent-worker@*.service' --all --no-pager || true
+  echo
+
+  shopt -s nullglob
+  local files=("$WORKER_ENV_DIR"/*.env)
+  if [[ "${#files[@]}" -eq 0 ]]; then
+    echo "No worker env files found. Create one with: scripts/dagentctl up main 8765"
+    return 0
+  fi
+
+  for file in "${files[@]}"; do
+    local name
+    name="$(basename "$file" .env)"
+    echo "== $name =="
+    if systemctl_user is-active --quiet "$(unit "$name")"; then
+      echo "service: active"
+    else
+      echo "service: inactive"
+    fi
+    if cmd_health "$name" >/tmp/dagentctl-health-"$name".json 2>/tmp/dagentctl-health-"$name".err; then
+      cat /tmp/dagentctl-health-"$name".json
+    else
+      cat /tmp/dagentctl-health-"$name".err
+    fi
+    echo
+  done
+}
+
+cmd_dlogs_targets() {
+  python3 - "$WORKER_ENV_DIR" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+env_dir = Path(sys.argv[1])
+targets = []
+
+for env_file in sorted(env_dir.glob("*.env")):
+    values = {}
+    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key] = value
+
+    name = values.get("DAGENT_WORKER_NAME") or env_file.stem
+    port = values.get("DAGENT_WORKER_PORT")
+    if not port:
+        continue
+
+    targets.append(
+        {
+            "targets": [f"host.docker.internal:{port}"],
+            "labels": {
+                "source": "host",
+                "app": "dagent",
+                "worker": name,
+            },
+        }
+    )
+
+print(json.dumps(targets, indent=2))
+PY
+}
+
+cmd_token() {
+  local name="$1"
+  load_worker_env "$name"
+  echo "$DAGENT_WORKER_API_TOKEN"
+}
+
+cmd_doctor() {
+  echo "Repo: $ROOT"
+  check_command systemctl
+  check_command journalctl
+  check_command loginctl
+  check_command python3
+  check_command curl
+  check_command openssl
+
+  if [[ -x "$ROOT/.venv/bin/uvicorn" ]]; then
+    echo "ok  .venv has uvicorn"
+  else
+    echo "fix .venv missing uvicorn; run: scripts/dagentctl install"
+  fi
+
+  if [[ -f "$ROOT/worker/config.yml" ]]; then
+    echo "ok  worker/config.yml exists"
+  else
+    echo "fix worker/config.yml missing"
+  fi
+
+  if [[ -f "$UNIT_PATH" ]]; then
+    echo "ok  systemd user unit installed"
+  else
+    echo "fix systemd unit missing; run: scripts/dagentctl install"
+  fi
+
+  if loginctl show-user "$USER" -p Linger --value 2>/dev/null | grep -qx yes; then
+    echo "ok  linger enabled for boot startup"
+  else
+    echo "fix linger disabled; run: scripts/dagentctl boot"
+  fi
+
+  echo
+  echo "Configured worker env files:"
+  find "$WORKER_ENV_DIR" -maxdepth 1 -type f -name '*.env' -print 2>/dev/null | sort || true
+}
+
+ensure_venv() {
+  if [[ -x "$ROOT/.venv/bin/uvicorn" ]]; then
+    return 0
+  fi
+
+  echo "Preparing Python venv..."
+  python3 -m venv "$ROOT/.venv"
+  "$ROOT/.venv/bin/pip" install -e "$ROOT/worker"
+}
+
+systemctl_user() {
+  systemctl --user "$@"
+}
+
+load_worker_env() {
+  local name="$1"
+  local file
+  file="$(env_file "$name")"
+  if [[ ! -f "$file" ]]; then
+    echo "Worker env not found: $file" >&2
+    echo "Create it with: scripts/dagentctl init $name" >&2
+    exit 1
+  fi
+
+  set -a
+  # shellcheck disable=SC1090
+  . "$file"
+  set +a
+}
+
+worker_port() {
+  local name="$1"
+  load_worker_env "$name" >/dev/null
+  echo "$DAGENT_WORKER_PORT"
+}
+
+unit() {
+  local name="$1"
+  validate_name "$name"
+  echo "dagent-worker@$name.service"
+}
+
+env_file() {
+  local name="$1"
+  validate_name "$name"
+  echo "$WORKER_ENV_DIR/$name.env"
+}
+
+validate_name() {
+  local name="$1"
+  if [[ ! "$name" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+    echo "Invalid worker name: $name" >&2
+    exit 2
+  fi
+}
+
+random_hex() {
+  local bytes="$1"
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex "$bytes"
+  else
+    python3 -c 'import secrets,sys; print(secrets.token_hex(int(sys.argv[1])))' "$bytes"
+  fi
+}
+
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "Missing required command: $1" >&2
+    exit 1
+  fi
+}
+
+check_command() {
+  if command -v "$1" >/dev/null 2>&1; then
+    echo "ok  $1"
+  else
+    echo "fix missing command: $1"
+  fi
+}
+
+main "$@"

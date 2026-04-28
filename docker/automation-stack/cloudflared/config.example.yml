@@ -1,0 +1,11 @@
+# Alternative to CLOUDFLARE_TUNNEL_TOKEN.
+# Use this if you prefer a named tunnel config mounted into the container.
+
+tunnel: replace-with-tunnel-id
+credentials-file: /etc/cloudflared/credentials.json
+
+ingress:
+  - hostname: n8n.divyeshvishwakarma.com
+    service: http://n8n:5678
+  - service: http_status:404
+

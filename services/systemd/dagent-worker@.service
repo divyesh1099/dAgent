@@ -1,0 +1,23 @@
+[Unit]
+Description=dAgent worker instance %i
+Documentation=file://{{DAGENT_ROOT}}/docs/worker-service.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={{DAGENT_ROOT}}
+EnvironmentFile=%h/.config/dagent/workers/%i.env
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=/usr/bin/test -x {{DAGENT_ROOT}}/.venv/bin/uvicorn
+ExecStartPre=/usr/bin/test -f ${DAGENT_WORKER_CONFIG}
+ExecStartPre=/bin/sh -c 'test -n "$DAGENT_WORKER_API_TOKEN"'
+ExecStart={{DAGENT_ROOT}}/.venv/bin/uvicorn dagent_worker.main:app --host ${DAGENT_WORKER_HOST} --port ${DAGENT_WORKER_PORT}
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target
+

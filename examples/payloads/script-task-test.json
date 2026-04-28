@@ -1,0 +1,13 @@
+{
+  "source": "ios",
+  "intent": "script_task",
+  "repo": "dagent",
+  "task": "Run the configured test script.",
+  "input_type": "text",
+  "require_approval": true,
+  "idempotency_key": "example-script-task-test-001",
+  "metadata": {
+    "script": "test"
+  }
+}
+

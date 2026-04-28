@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+ENV_FILE="docker/automation-stack/.env"
+COMPOSE_FILE="docker/automation-stack/compose.yml"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  scripts/n8nctl up       Start n8n stack
+  scripts/n8nctl down     Stop n8n stack
+  scripts/n8nctl restart  Restart n8n stack
+  scripts/n8nctl ps       Show containers
+  scripts/n8nctl logs     Follow logs
+  scripts/n8nctl health   Check local n8n URL
+  scripts/n8nctl startup  Install boot/login startup service
+  scripts/n8nctl public   Test public Cloudflare route
+  scripts/n8nctl watch-env Configure env vars for watch webhook workflow
+EOF
+}
+
+compose() {
+  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+}
+
+case "${1:-help}" in
+  up) compose up -d postgres redis n8n n8n-worker ;;
+  down) compose down ;;
+  restart) compose restart n8n n8n-worker ;;
+  ps) compose ps ;;
+  logs) compose logs -f --tail=120 n8n n8n-worker postgres redis ;;
+  health)
+    curl -fsS -I http://127.0.0.1:5678 | sed -n '1,12p'
+    ;;
+  startup) scripts/install_automation_startup.sh ;;
+  public) scripts/test_n8n_public.sh ;;
+  watch-env) scripts/setup_n8n_watch_env.sh "${2:-main}" ;;
+  help|-h|--help) usage ;;
+  *) usage; exit 2 ;;
+esac

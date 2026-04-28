@@ -1,0 +1,76 @@
+# Copy to worker/config.yml and edit for your workstation.
+
+data_dir: .data/worker
+notes_dir: .data/notes
+max_parallel_jobs: 2
+default_require_approval: true
+
+auto_run_intents:
+  - capture_idea
+  - research_note
+  - document_task
+  - repo_status
+
+approval_required_intents:
+  - codex_task
+  - claude_task
+  - script_task
+  - docker_compose
+  - browser_task
+  - job_packet
+
+repo_required_intents:
+  - repo_status
+  - codex_task
+  - claude_task
+  - script_task
+
+intent_tools:
+  codex_task: codex
+  claude_task: claude
+
+repos:
+  dagent:
+    path: /home/divyesh-nandlal-vishwakarma/Desktop/Divyesh/dAgent
+    github_account: personal
+    default_tool: codex
+    allowed_intents:
+      - repo_status
+      - codex_task
+      - claude_task
+      - script_task
+
+tools:
+  codex:
+    command:
+      - codex
+      - exec
+      - "{task}"
+    timeout_seconds: 7200
+    allowed_repos:
+      - "*"
+
+  claude:
+    command:
+      - claude
+      - -p
+      - "{task}"
+    timeout_seconds: 7200
+    allowed_repos:
+      - "*"
+
+scripts:
+  test:
+    command:
+      - bash
+      - -lc
+      - "if [ -f package.json ]; then npm test; elif [ -f pyproject.toml ]; then pytest; else echo 'No known test command'; fi"
+    timeout_seconds: 1800
+    allowed_repos:
+      - "*"
+
+notifications:
+  ntfy_url: ""
+  ntfy_topic: dagent
+  ntfy_token: ""
+

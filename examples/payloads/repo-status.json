@@ -1,0 +1,9 @@
+{
+  "source": "ios",
+  "intent": "repo_status",
+  "repo": "dagent",
+  "task": "Check current repo status.",
+  "input_type": "text",
+  "idempotency_key": "example-repo-status-001"
+}
+
