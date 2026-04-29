@@ -155,12 +155,12 @@ For the test URL:
 
 Then run:
 
-```bash
-export CF_ACCESS_CLIENT_ID='paste-cloudflare-client-id'
-export CF_ACCESS_CLIENT_SECRET='paste-cloudflare-client-secret'
+Use local n8n for test webhook events when possible, because `/webhook-test/...`
+only works while the editor is actively listening:
 
+```bash
 scripts/test_n8n_watch_webhook.sh \
-  'https://n8n.divyeshvishwakarma.com/webhook-test/dagent-watch-capture' \
+  'http://127.0.0.1:5678/webhook-test/dagent-watch-capture' \
   'First capture idea through n8n.'
 ```
 
@@ -173,6 +173,13 @@ For production:
 scripts/test_n8n_watch_webhook.sh \
   'https://n8n.divyeshvishwakarma.com/webhook/dagent-watch-capture' \
   'First production capture idea through n8n.'
+```
+
+If this returns the Cloudflare Access 403 JSON, add the narrow Access Bypass app
+for `n8n.divyeshvishwakarma.com/webhook/*`, then rerun:
+
+```bash
+scripts/n8nctl public
 ```
 
 ## 5. Verify Result

@@ -1,0 +1,109 @@
+{
+  "name": "dAgent Watch Capture Router",
+  "id": "f6f7257e-9d53-4e8c-a982-ecc90976f167",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "dagent-watch-capture",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "d91f90e8-44f6-45e7-b5eb-0d7eaf248b23",
+      "name": "Watch Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -360,
+        0
+      ],
+      "webhookId": "dagent-watch-capture"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst headers = input.headers || {};\nconst body = input.body || {};\nconst env = typeof $env !== 'undefined' ? $env : {};\n\nfunction header(name) {\n  const wanted = name.toLowerCase();\n  for (const [key, value] of Object.entries(headers)) {\n    if (key.toLowerCase() === wanted) return value;\n  }\n  return undefined;\n}\n\nconst expectedSecret = env.DAGENT_SHORTCUT_SECRET || '';\nconst providedSecret = header('x-dagent-shortcut-secret') || '';\nif (!expectedSecret || providedSecret !== expectedSecret) {\n  throw new Error('invalid shortcut secret');\n}\n\nconst task = body.task || body.text || body.idea;\nif (!task || !String(task).trim()) {\n  throw new Error('task is required');\n}\n\nconst idempotencyKey = body.idempotency_key || `n8n-${$execution.id}`;\nconst payload = {\n  intent: body.intent || 'capture_idea',\n  task: String(task),\n  source: body.source || 'apple_watch',\n  input_type: body.input_type || 'voice',\n  idempotency_key: idempotencyKey,\n};\n\nfor (const key of ['repo', 'tool', 'files', 'priority', 'require_approval', 'dry_run', 'metadata']) {\n  if (body[key] !== undefined && body[key] !== null && body[key] !== '') {\n    payload[key] = body[key];\n  }\n}\n\nreturn [{ json: { payload, idempotency_key: idempotencyKey } }];"
+      },
+      "id": "420f3c76-934a-44a6-b91f-5f6b2d02aca8",
+      "name": "Normalize Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -80,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.DAGENT_WORKER_URL || 'http://host.docker.internal:8765').replace(/\\/$/, '') + '/v1/jobs' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.DAGENT_WORKER_API_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $json.idempotency_key }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.payload }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "f078c803-3989-4429-9ecb-54c24d70bc30",
+      "name": "Submit Worker Job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        220,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Watch Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Request": {
+      "main": [
+        [
+          {
+            "node": "Submit Worker Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "pinData": {},
+  "versionId": "1c8a33a5-81e1-4b57-a9d0-0e46a6dfd121",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

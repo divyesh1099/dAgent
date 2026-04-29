@@ -61,12 +61,21 @@ X-Dagent-Shortcut-Secret: <shortcut-to-n8n-secret>
 
 n8n validates this secret before it calls the local worker.
 
-Because `n8n.divyeshvishwakarma.com` is protected by Cloudflare Access, the
-Watch shortcut must also send the Cloudflare service token headers:
+The n8n editor root should remain protected by Cloudflare Access. The production
+webhook path should have a narrow Cloudflare Access Bypass policy for
+`/webhook/*`, because Apple Watch Shortcuts are not a good place to maintain
+Cloudflare Access service-token credentials.
+
+Every Watch request must still send the dAgent shared secret header:
 
 ```text
-CF-Access-Client-Id: <cloudflare-service-token-client-id>
-CF-Access-Client-Secret: <cloudflare-service-token-client-secret>
+X-Dagent-Shortcut-Secret: <DAGENT_SHORTCUT_SECRET>
+```
+
+Verify the Cloudflare split after changing Zero Trust:
+
+```bash
+scripts/n8nctl public
 ```
 
 Use the production n8n webhook URL on Apple Watch:
@@ -106,8 +115,6 @@ Actions:
 
      ```text
      Content-Type: application/json
-     CF-Access-Client-Id: <cloudflare-service-token-client-id>
-     CF-Access-Client-Secret: <cloudflare-service-token-client-secret>
      X-Dagent-Shortcut-Secret: <DAGENT_SHORTCUT_SECRET>
      ```
 

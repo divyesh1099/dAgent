@@ -17,25 +17,162 @@ Usage:
   scripts/n8nctl health   Check local n8n URL
   scripts/n8nctl startup  Install boot/login startup service
   scripts/n8nctl public   Test public Cloudflare route
+  scripts/n8nctl access-env <client-id> <client-secret>
+                         Store Cloudflare Access service-token headers
   scripts/n8nctl watch-env Configure env vars for watch webhook workflow
 EOF
 }
 
+docker_cli() {
+  if docker info >/dev/null 2>&1; then
+    docker "$@"
+    return
+  fi
+
+  if can_use_sg_docker; then
+    local command
+    printf -v command '%q ' docker "$@"
+    sg docker -c "$command"
+    return
+  fi
+
+  docker "$@"
+}
+
+can_use_sg_docker() {
+  command -v sg >/dev/null 2>&1 || return 1
+  is_user_in_docker_group || return 1
+  sg docker -c 'docker info >/dev/null 2>&1'
+}
+
+is_user_in_docker_group() {
+  getent group docker | awk -F: -v user="$USER" '
+    {
+      split($4, members, ",")
+      for (i in members) {
+        if (members[i] == user) {
+          found = 1
+        }
+      }
+    }
+    END { exit found ? 0 : 1 }
+  '
+}
+
 compose() {
-  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+  docker_cli compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+}
+
+compose_with_tunnel() {
+  if tunnel_enabled; then
+    docker_cli compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" --profile tunnel "$@"
+  else
+    compose "$@"
+  fi
+}
+
+compose_services() {
+  local services=(postgres redis n8n n8n-worker)
+  if tunnel_enabled; then
+    services+=(cloudflared)
+  fi
+  printf '%s\n' "${services[@]}"
+}
+
+tunnel_enabled() {
+  local token
+  token="$(env_value CLOUDFLARE_TUNNEL_TOKEN)"
+  [[ -n "$token" && "$token" != "replace-with-cloudflare-tunnel-token" && "$token" != "unused-existing-system-cloudflared-service" ]]
+}
+
+env_value() {
+  local key="$1"
+  if [[ ! -f "$ENV_FILE" ]]; then
+    return 0
+  fi
+  awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$ENV_FILE"
+}
+
+set_env_values() {
+  local client_id="$1"
+  local client_secret="$2"
+
+  if [[ ! -f "$ENV_FILE" ]]; then
+    echo "$ENV_FILE does not exist. Run scripts/deploy_n8n.sh first." >&2
+    exit 1
+  fi
+
+  python3 - "$ENV_FILE" "$client_id" "$client_secret" <<'PY'
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+values = {
+    "CF_ACCESS_CLIENT_ID": sys.argv[2],
+    "CF_ACCESS_CLIENT_SECRET": sys.argv[3],
+}
+
+seen: set[str] = set()
+lines: list[str] = []
+for line in path.read_text(encoding="utf-8").splitlines():
+    if line and not line.startswith("#") and "=" in line:
+        key = line.split("=", 1)[0]
+        if key in values:
+            lines.append(f"{key}={values[key]}")
+            seen.add(key)
+            continue
+    lines.append(line)
+
+if lines and lines[-1] != "":
+    lines.append("")
+for key, value in values.items():
+    if key not in seen:
+        lines.append(f"{key}={value}")
+
+path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+PY
+  chmod 600 "$ENV_FILE"
+  echo "Stored Cloudflare Access service-token headers in $ENV_FILE."
+}
+
+cmd_up() {
+  mapfile -t services < <(compose_services)
+  compose_with_tunnel up -d "${services[@]}"
+}
+
+cmd_restart() {
+  local services=(n8n n8n-worker)
+  if tunnel_enabled; then
+    services+=(cloudflared)
+  fi
+  compose_with_tunnel restart "${services[@]}"
+}
+
+cmd_logs() {
+  mapfile -t services < <(compose_services)
+  compose_with_tunnel logs -f --tail=120 "${services[@]}"
 }
 
 case "${1:-help}" in
-  up) compose up -d postgres redis n8n n8n-worker ;;
+  up) cmd_up ;;
   down) compose down ;;
-  restart) compose restart n8n n8n-worker ;;
-  ps) compose ps ;;
-  logs) compose logs -f --tail=120 n8n n8n-worker postgres redis ;;
+  restart) cmd_restart ;;
+  ps) compose_with_tunnel ps ;;
+  logs) cmd_logs ;;
   health)
     curl -fsS -I http://127.0.0.1:5678 | sed -n '1,12p'
     ;;
   startup) scripts/install_automation_startup.sh ;;
   public) scripts/test_n8n_public.sh ;;
+  access-env)
+    if [[ $# -ne 3 ]]; then
+      echo "Usage: scripts/n8nctl access-env <client-id> <client-secret>" >&2
+      exit 2
+    fi
+    set_env_values "$2" "$3"
+    ;;
   watch-env) scripts/setup_n8n_watch_env.sh "${2:-main}" ;;
   help|-h|--help) usage ;;
   *) usage; exit 2 ;;

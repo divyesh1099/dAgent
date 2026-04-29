@@ -8,9 +8,12 @@ if [[ $# -lt 1 ]]; then
 Usage:
   scripts/test_n8n_watch_webhook.sh <webhook-url> [task]
 
-For public Cloudflare Access-protected URLs, also set:
+Production webhook URLs should normally have a narrow Cloudflare Access Bypass
+policy for /webhook/*. If you intentionally keep the webhook behind Access, set:
   export CF_ACCESS_CLIENT_ID='...'
   export CF_ACCESS_CLIENT_SECRET='...'
+or store them once with:
+  scripts/n8nctl access-env '<client-id>' '<client-secret>'
 EOF
   exit 2
 fi
@@ -30,15 +33,18 @@ if [[ -z "$shortcut_secret" ]]; then
   exit 1
 fi
 
+cf_access_client_id="${CF_ACCESS_CLIENT_ID:-$(get_env CF_ACCESS_CLIENT_ID)}"
+cf_access_client_secret="${CF_ACCESS_CLIENT_SECRET:-$(get_env CF_ACCESS_CLIENT_SECRET)}"
+
 headers=(
   -H "Content-Type: application/json"
   -H "X-Dagent-Shortcut-Secret: $shortcut_secret"
 )
 
-if [[ -n "${CF_ACCESS_CLIENT_ID:-}" && -n "${CF_ACCESS_CLIENT_SECRET:-}" ]]; then
+if [[ -n "$cf_access_client_id" && -n "$cf_access_client_secret" && "$cf_access_client_id" != "replace-with-cloudflare-access-client-id" && "$cf_access_client_secret" != "replace-with-cloudflare-access-client-secret" ]]; then
   headers+=(
-    -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID"
-    -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET"
+    -H "CF-Access-Client-Id: $cf_access_client_id"
+    -H "CF-Access-Client-Secret: $cf_access_client_secret"
   )
 fi
 
@@ -90,7 +96,13 @@ if [[ "$http_code" =~ ^3 ]]; then
     echo "Check the n8n Access app has a Service Auth policy for this service token." >&2
   fi
 else
-  cat "$body_file" >&2
-  echo >&2
+  if grep -qiE 'cf-access|cloudflare access|cloudflareaccess|"aud"' "$headers_file" "$body_file"; then
+    echo "Cloudflare Access rejected the request before it reached n8n." >&2
+    echo "Store a valid Cloudflare service token with: scripts/n8nctl access-env '<client-id>' '<client-secret>'" >&2
+    echo "Also make sure the Access app has a Service Auth policy for that token." >&2
+  else
+    cat "$body_file" >&2
+    echo >&2
+  fi
 fi
 exit 1

@@ -4,20 +4,31 @@
 
 ```bash
 scripts/n8nctl up
-scripts/dagentctl up main 8765
+scripts/dagentctl health main
 ```
 
-For boot startup:
+For boot startup, use the combined startup installer:
 
 ```bash
 scripts/n8nctl startup
-scripts/dagentctl boot
 ```
 
+That command installs/enables the host worker service, starts the `main` worker,
+installs the automation-stack user service, enables lingering, and starts the
+Compose stack. If `CLOUDFLARE_TUNNEL_TOKEN` is set to a real tunnel token in
+`docker/automation-stack/.env`, `scripts/n8nctl up` also starts `cloudflared`.
+
 The Docker Compose services use `restart: unless-stopped`, so Docker will restart
-existing containers after the Docker daemon starts. `scripts/n8nctl startup`
-adds a small user-level systemd guard that also runs `docker compose up -d`
-after startup/login.
+existing containers after the Docker daemon starts. The systemd guard retries if
+Docker is still starting and waits for the worker before starting n8n.
+
+If startup says Docker is running but this user cannot access
+`/var/run/docker.sock`, add the user to the Docker group once, then log out and
+back in:
+
+```bash
+sudo usermod -aG docker "$USER"
+```
 
 For startup status:
 
@@ -54,6 +65,41 @@ worker ready endpoint:
 
 ```bash
 curl -H "Authorization: Bearer $DAGENT_WORKER_API_TOKEN" http://127.0.0.1:8765/ready
+```
+
+## Cloudflare Access 403
+
+This response means Cloudflare Access blocked the request before n8n saw it:
+
+```text
+Forbidden. You don't have permission to view this.
+```
+
+For dAgent, keep the n8n editor root protected by Cloudflare Access, but bypass
+Cloudflare Access for the production webhook path. The webhook is still protected
+by `X-Dagent-Shortcut-Secret` before n8n calls the worker.
+
+In Cloudflare Zero Trust:
+
+```text
+Access > Applications > Add application > Self-hosted
+Hostname: n8n.divyeshvishwakarma.com
+Path: /webhook/*
+Policy action: Bypass
+Include: Everyone
+```
+
+Then verify:
+
+```bash
+scripts/n8nctl public
+```
+
+Expected result:
+
+```text
+OK: Cloudflare Access appears to be protecting n8n.divyeshvishwakarma.com.
+OK: Cloudflare Access is not blocking /webhook/dagent-watch-capture.
 ```
 
 ## Logs

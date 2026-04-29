@@ -66,6 +66,7 @@ scripts/dagentctl token main
 
 ```bash
 scripts/deploy_n8n.sh
+scripts/n8nctl startup
 ```
 
 5. Configure the worker:
@@ -91,6 +92,7 @@ uvicorn dagent_worker.main:app --host 127.0.0.1 --port 8765
 
 ```bash
 ./scripts/smoke_test_worker.sh
+scripts/n8nctl public
 ```
 
 From n8n running inside Docker, call the host worker at:
@@ -105,6 +107,10 @@ The Compose file includes the Linux `host-gateway` mapping for that name.
 
 - n8n runs as its own Compose project with Postgres persistence.
 - Redis is included so n8n can run in queue mode with workers.
+- `scripts/n8nctl startup` installs a user service that starts the host worker before n8n.
+- `scripts/n8nctl up` starts `cloudflared` too when `CLOUDFLARE_TUNNEL_TOKEN` is set.
+- Cloudflare Access should protect the n8n editor root, while production
+  `/webhook/*` paths should use a narrow Access Bypass plus the dAgent shared secret.
 - The local worker has a persistent SQLite job log.
 - Every repo and tool is named in `worker/config.yml`.
 - High-risk intents require an approval step.

@@ -58,7 +58,7 @@ else
   echo "Using existing $ENV_FILE"
 fi
 
-docker compose --env-file "$ENV_FILE" -f docker/automation-stack/compose.yml up -d postgres redis n8n n8n-worker
+scripts/n8nctl up
 
 echo
 echo "Waiting for n8n on http://127.0.0.1:5678 ..."
@@ -73,4 +73,3 @@ done
 echo "n8n did not become reachable in time. Check logs with:"
 echo "  scripts/n8nctl logs"
 exit 1
-

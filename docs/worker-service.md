@@ -20,6 +20,16 @@ scripts/dagentctl boot
 
 If your system asks for sudo, run the printed `sudo loginctl enable-linger ...` command once.
 
+If you also want n8n, the n8n queue worker, and the optional Cloudflare tunnel to
+come back with the host worker, run:
+
+```bash
+scripts/n8nctl startup
+```
+
+That installer makes the automation stack wait for the configured worker before
+starting the Docker services.
+
 ## Check It
 
 ```bash
@@ -90,4 +100,3 @@ scripts/dagentctl doctor
 ```
 
 It checks common service prerequisites and tells you the next command to run.
-

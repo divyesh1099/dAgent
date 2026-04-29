@@ -25,6 +25,8 @@ Use separate secrets for separate hops:
 
 - Apple Shortcut to n8n: shared webhook secret or header token.
 - n8n UI: Cloudflare Access plus n8n auth.
+- Public n8n production webhooks: narrow Cloudflare Access Bypass only for the
+  required `/webhook/...` paths, plus `X-Dagent-Shortcut-Secret`.
 - n8n to worker: `Authorization: Bearer <worker-token>`.
 - Optional n8n to worker HMAC: `X-Dagent-Timestamp` and `X-Dagent-Signature`.
 - ntfy: private topics and auth tokens.
@@ -79,6 +81,8 @@ The worker runs commands as argument arrays, not shell strings.
 
 - Expose `n8n.yourdomain.com` through Cloudflare Tunnel.
 - Protect n8n editor UI with Cloudflare Access.
+- Do not put production webhook paths behind Cloudflare Access unless every
+  caller can send valid Access service-token headers.
 - Keep production webhook paths random and secret.
 - Keep the worker bound to `127.0.0.1` or private LAN.
 - Do not expose Docker socket, SSH agent, browser profiles, or repo roots to n8n directly.
@@ -98,4 +102,3 @@ request
 ```
 
 This is slower than fully autonomous execution, but it is much less likely to ruin a day.
-
