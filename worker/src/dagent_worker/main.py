@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
+import json
 import os
 from typing import Any
+from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 
@@ -86,11 +88,14 @@ async def create_job(payload: JobRequest, request: Request, _auth: None = Depend
 
     _validate_payload(config, payload)
 
+    payload_dict = payload.model_dump(mode="json")
     idempotency_key = payload.idempotency_key or request.headers.get("Idempotency-Key")
     if idempotency_key:
         existing = store.get_by_idempotency(idempotency_key)
         if existing:
-            return _response(existing)
+            if _same_idempotent_payload(existing["payload"], payload_dict):
+                return _response(existing)
+            idempotency_key = _collision_idempotency_key(idempotency_key)
 
     approval_code: str | None = None
     approval_hash: str | None = None
@@ -102,7 +107,7 @@ async def create_job(payload: JobRequest, request: Request, _auth: None = Depend
         status_value = JobStatus.queued.value
 
     record = store.create(
-        payload=payload.model_dump(mode="json"),
+        payload=payload_dict,
         status=status_value,
         idempotency_key=idempotency_key,
         approval_hash=approval_hash,
@@ -203,6 +208,20 @@ def _submit_job(app_: FastAPI, job_id: str) -> None:
     runner: JobRunner = app_.state.runner
     executor: ThreadPoolExecutor = app_.state.executor
     executor.submit(runner.run, job_id)
+
+
+def _same_idempotent_payload(existing_payload: dict[str, Any], incoming_payload: dict[str, Any]) -> bool:
+    return _canonical_payload(existing_payload) == _canonical_payload(incoming_payload)
+
+
+def _canonical_payload(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _collision_idempotency_key(idempotency_key: str) -> str:
+    suffix = f"-{uuid4().hex[:12]}"
+    prefix_length = 160 - len(suffix)
+    return f"{idempotency_key[:prefix_length]}{suffix}"
 
 
 def _response(record: dict[str, Any], approval_code: str | None = None) -> JobResponse:

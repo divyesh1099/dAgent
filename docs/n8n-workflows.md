@@ -53,7 +53,6 @@ Common optional fields:
   "source": "apple_watch",
   "input_type": "voice",
   "require_approval": true,
-  "idempotency_key": "shortcut-run-id",
   "metadata": {
     "priority_reason": "walking idea"
   }
@@ -70,7 +69,9 @@ Authorization: Bearer <DAGENT_WORKER_API_TOKEN>
 Content-Type: application/json
 ```
 
-Use `Idempotency-Key` when the shortcut or n8n execution has a stable unique ID.
+For Watch captures, let n8n generate the worker `Idempotency-Key`. Do not reuse
+plain execution IDs like `n8n-13`, because n8n counters can reset while the
+worker DB keeps older keys.
 
 ## Approval Workflow
 

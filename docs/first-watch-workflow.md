@@ -114,7 +114,7 @@ Headers:
 ```text
 Authorization: ={{ 'Bearer ' + $env.DAGENT_WORKER_API_TOKEN }}
 Content-Type: application/json
-Idempotency-Key: ={{ $json.body.idempotency_key || ('n8n-' + $execution.id) }}
+Idempotency-Key: ={{ $json.idempotency_key }}
 ```
 
 Keep the `Authorization` value on one line. A trailing newline in this field
@@ -140,7 +140,7 @@ source: apple_watch
 intent: capture_idea
 task: ={{ $json.body.task || $json.body.text || $json.body.idea }}
 input_type: voice
-idempotency_key: ={{ $json.body.idempotency_key || ('n8n-' + $execution.id) }}
+idempotency_key: ={{ $json.idempotency_key }}
 ```
 
 Save the workflow.
