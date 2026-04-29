@@ -26,7 +26,8 @@ notifier = Notifier(config.notifications)
 if not notifier.enabled():
     raise SystemExit("ntfy is not configured in worker/config.yml")
 
-notifier.send(title="dAgent ntfy test", message=message, priority="default", tags="white_check_mark")
-print(f"sent to {config.notifications.ntfy_url.rstrip('/')}/{config.notifications.ntfy_topic}")
+results = notifier.send(title="dAgent ntfy test", message=message, priority="default", tags="white_check_mark")
+for result in results:
+    status = "sent" if result.get("ok") else "failed"
+    print(f"{status} {config.notifications.ntfy_url.rstrip('/')}/{result.get('topic')}")
 PY
-

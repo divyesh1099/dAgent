@@ -37,7 +37,8 @@ The worker is configured to publish to local dLogs ntfy:
 ```yaml
 notifications:
   ntfy_url: "http://127.0.0.1:8080"
-  ntfy_topic: <your-dagent-topic>
+  ntfy_topics:
+    - <your-dagent-topic>
   ntfy_token: ""
 ```
 
@@ -50,7 +51,7 @@ https://ntfy.divyeshvishwakarma.com/<your-dagent-topic>
 Get the actual topic from your ignored local config:
 
 ```bash
-grep -n 'ntfy_topic' worker/config.yml
+grep -n 'ntfy_topics' -A3 worker/config.yml
 ```
 
 Then test:

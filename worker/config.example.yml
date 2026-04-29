@@ -71,6 +71,6 @@ scripts:
 
 notifications:
   ntfy_url: ""
-  ntfy_topic: dagent
+  ntfy_topics:
+    - dagent
   ntfy_token: ""
-

@@ -42,8 +42,12 @@ class CommandConfig:
 @dataclass(frozen=True)
 class NotificationConfig:
     ntfy_url: str = ""
-    ntfy_topic: str = "dagent"
+    ntfy_topics: tuple[str, ...] = ("dagent",)
     ntfy_token: str = ""
+
+    @property
+    def ntfy_topic(self) -> str:
+        return self.ntfy_topics[0] if self.ntfy_topics else ""
 
 
 @dataclass(frozen=True)
@@ -97,9 +101,21 @@ def load_config(path: str | os.PathLike[str] | None = None) -> WorkerConfig:
     notes_dir = _resolve_path(raw.get("notes_dir", ".data/notes"), base_dir)
 
     notifications_raw = raw.get("notifications", {}) or {}
+    ntfy_topic_value = os.getenv("NTFY_TOPIC")
+    ntfy_topics_value = os.getenv("NTFY_TOPICS")
+    if ntfy_topics_value:
+        ntfy_topics = tuple(topic.strip() for topic in ntfy_topics_value.split(",") if topic.strip())
+    elif ntfy_topic_value:
+        ntfy_topics = (ntfy_topic_value,)
+    else:
+        configured_topics = notifications_raw.get("ntfy_topics")
+        if configured_topics is None:
+            configured_topics = [notifications_raw.get("ntfy_topic", "dagent")]
+        ntfy_topics = tuple(_string_list(configured_topics, "notifications.ntfy_topics"))
+
     notifications = NotificationConfig(
         ntfy_url=os.getenv("NTFY_URL", str(notifications_raw.get("ntfy_url", ""))),
-        ntfy_topic=os.getenv("NTFY_TOPIC", str(notifications_raw.get("ntfy_topic", "dagent"))),
+        ntfy_topics=ntfy_topics,
         ntfy_token=os.getenv("NTFY_TOKEN", str(notifications_raw.get("ntfy_token", ""))),
     )
 

@@ -39,11 +39,11 @@ class JobRunner:
             with log_path.open("a", encoding="utf-8") as log:
                 log.write(f"\nERROR: {exc}\n")
             finished = self._store.finish(job_id, status="failed", error=str(exc))
-            self._notifier.job_finished(finished)
+            self._log_notification_results(log_path, self._notifier.job_finished(finished))
             return
 
         finished = self._store.finish(job_id, status="succeeded", result=result)
-        self._notifier.job_finished(finished)
+        self._log_notification_results(log_path, self._notifier.job_finished(finished))
 
     def _execute(self, job_id: str, payload: JobRequest, log_path: Path) -> dict[str, Any]:
         if payload.intent in {"capture_idea", "research_note", "document_task", "job_packet"}:
@@ -199,6 +199,17 @@ class JobRunner:
         log_dir.mkdir(parents=True, exist_ok=True)
         return log_dir / f"{job_id}.log"
 
+    def _log_notification_results(self, log_path: Path, results: list[dict[str, Any]]) -> None:
+        if not results:
+            with log_path.open("a", encoding="utf-8") as log:
+                log.write("Notification: disabled\n")
+            return
+        with log_path.open("a", encoding="utf-8") as log:
+            for result in results:
+                status = "ok" if result.get("ok") else "failed"
+                detail = result.get("status") or result.get("error") or "-"
+                log.write(f"Notification {status}: {result.get('topic')} ({detail})\n")
+
 
 def _render_command(command: tuple[str, ...], *, payload: JobRequest, repo: RepoConfig, job_id: str) -> list[str]:
     context: dict[str, str] = {
@@ -243,4 +254,3 @@ def _tail(text: str, limit: int = 6000) -> str:
     if len(text) <= limit:
         return text
     return text[-limit:]
-
