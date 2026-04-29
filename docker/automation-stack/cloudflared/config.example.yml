@@ -5,7 +5,8 @@ tunnel: replace-with-tunnel-id
 credentials-file: /etc/cloudflared/credentials.json
 
 ingress:
+  - hostname: dagent.divyeshvishwakarma.com
+    service: http://host.docker.internal:8765
   - hostname: n8n.divyeshvishwakarma.com
     service: http://n8n:5678
   - service: http_status:404
-

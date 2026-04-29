@@ -27,11 +27,20 @@ uvicorn dagent_worker.main:app --host 127.0.0.1 --port 8765
 
 ## Endpoints
 
+- `GET /ui`: worker dashboard for runs, logs, retries, edits, and ntfy resend.
 - `GET /health`: unauthenticated liveness check.
 - `GET /ready`: authenticated config/ready check.
 - `POST /v1/jobs`: create a job.
 - `GET /v1/jobs`: list recent jobs.
 - `GET /v1/jobs/{job_id}`: inspect one job.
+- `GET /v1/jobs/{job_id}/log`: read the latest job log text.
+- `GET /v1/jobs/{job_id}/note`: read note output when the job produced one.
+- `POST /v1/jobs/{job_id}/cancel`: cancel a queued/running job.
+- `POST /v1/jobs/{job_id}/retry`: rerun the same payload as a fresh job.
+- `POST /v1/jobs/{job_id}/requeue`: edit fields and queue a fresh job.
+- `POST /v1/jobs/{job_id}/notify`: resend the job result through ntfy.
+- `DELETE /v1/jobs/{job_id}`: delete a terminal job record and its worker log.
+- `GET /v1/dashboard`: aggregate local configured workers for the dashboard.
 - `POST /v1/jobs/{job_id}/approval`: approve or reject an approval-required job.
 
 ## Auth
@@ -60,4 +69,3 @@ When enabled, requests with bodies must include:
 X-Dagent-Timestamp: <unix seconds>
 X-Dagent-Signature: sha256=<hmac_sha256(timestamp + "." + raw_body)>
 ```
-

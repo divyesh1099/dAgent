@@ -81,6 +81,12 @@ class JobStore:
             ).fetchone()
         return _row_to_dict(row) if row else None
 
+    def delete(self, job_id: str) -> bool:
+        with self._lock:
+            cursor = self._conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+            self._conn.commit()
+        return cursor.rowcount > 0
+
     def list_recent(self, limit: int = 50) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._conn.execute(
@@ -163,15 +169,20 @@ class JobStore:
     def mark_running(self, job_id: str, log_path: str) -> dict[str, Any]:
         now = utc_now()
         with self._lock:
-            self._conn.execute(
+            cursor = self._conn.execute(
                 """
                 UPDATE jobs
                 SET status = ?, started_at = ?, updated_at = ?, log_path = ?
-                WHERE id = ?
+                WHERE id = ? AND status = ?
                 """,
-                ("running", now, now, log_path, job_id),
+                ("running", now, now, log_path, job_id, "queued"),
             )
             self._conn.commit()
+            if cursor.rowcount == 0:
+                unchanged = self.get(job_id)
+                if unchanged is None:
+                    raise KeyError(job_id)
+                return unchanged
         updated = self.get(job_id)
         if updated is None:
             raise KeyError(job_id)

@@ -34,6 +34,7 @@ class JobStatus(str, Enum):
     succeeded = "succeeded"
     failed = "failed"
     rejected = "rejected"
+    cancelled = "cancelled"
 
 
 class FileRef(BaseModel):
@@ -79,17 +80,41 @@ class ApprovalRequest(BaseModel):
 
 class JobResponse(BaseModel):
     id: str
+    worker: str | None = None
     status: JobStatus
     intent: str
     repo: str | None = None
     tool: str | None = None
+    source: Source | None = None
+    input_type: InputType | None = None
     task_preview: str
     created_at: str
     updated_at: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    idempotency_key: str | None = None
+    payload: dict[str, Any] | None = None
     result: dict[str, Any] | None = None
     error: str | None = None
     log_path: str | None = None
     approval_code: str | None = None
+
+
+class JobRequeueRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: str | None = Field(default=None, min_length=2, max_length=96, pattern=r"^[a-z][a-z0-9_:-]*$")
+    task: str | None = Field(default=None, min_length=1, max_length=16000)
+    repo: str | None = Field(default=None, min_length=1, max_length=120, pattern=r"^[A-Za-z0-9_.-]+$")
+    tool: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_.-]+$")
+    source: Source | None = None
+    input_type: InputType | None = None
+    files: list[FileRef] | None = Field(default=None, max_length=20)
+    priority: Literal["low", "normal", "high"] | None = None
+    require_approval: bool | None = None
+    dry_run: bool | None = None
+    metadata: dict[str, Any] | None = None
+    cancel_existing: bool = False
 
 
 class ReadyResponse(BaseModel):
@@ -97,4 +122,3 @@ class ReadyResponse(BaseModel):
     configured_repos: list[str]
     configured_tools: list[str]
     max_parallel_jobs: int
-

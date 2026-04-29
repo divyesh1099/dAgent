@@ -4,17 +4,24 @@ from datetime import datetime, timezone
 from pathlib import Path
 import os
 import re
+import signal
 import shlex
 import subprocess
+import threading
+import time
 from typing import Any
 
 from .config import CommandConfig, RepoConfig, WorkerConfig
 from .jobs import JobStore
 from .notifier import Notifier
-from .schemas import JobRequest
+from .schemas import JobRequest, JobStatus
 
 
 class RunnerError(RuntimeError):
+    pass
+
+
+class RunnerCancelled(RunnerError):
     pass
 
 
@@ -23,26 +30,54 @@ class JobRunner:
         self._config = config
         self._store = store
         self._notifier = notifier
+        self._processes: dict[str, subprocess.Popen[str]] = {}
+        self._cancel_requested: set[str] = set()
+        self._lock = threading.RLock()
+
+    def cancel(self, job_id: str) -> None:
+        with self._lock:
+            self._cancel_requested.add(job_id)
+            process = self._processes.get(job_id)
+        if process and process.poll() is None:
+            _terminate_process(process)
 
     def run(self, job_id: str) -> None:
         record = self._store.get(job_id)
         if record is None:
             raise RunnerError(f"unknown job {job_id}")
+        if record["status"] == JobStatus.cancelled.value:
+            return
 
         payload = JobRequest.model_validate(record["payload"])
         log_path = self._log_path(job_id)
-        self._store.mark_running(job_id, str(log_path))
+        running = self._store.mark_running(job_id, str(log_path))
+        if running["status"] == JobStatus.cancelled.value:
+            return
+        if running["status"] != JobStatus.running.value:
+            return
 
         try:
             result = self._execute(job_id, payload, log_path)
+        except RunnerCancelled as exc:
+            with log_path.open("a", encoding="utf-8") as log:
+                log.write(f"\nCANCELLED: {exc}\n")
+            finished = self._store.finish(job_id, status=JobStatus.cancelled.value, error=str(exc))
+            self._log_notification_results(log_path, self._notifier.job_finished(finished))
+            return
         except Exception as exc:
             with log_path.open("a", encoding="utf-8") as log:
                 log.write(f"\nERROR: {exc}\n")
-            finished = self._store.finish(job_id, status="failed", error=str(exc))
+            if self._is_cancelled(job_id):
+                finished = self._store.finish(job_id, status=JobStatus.cancelled.value, error="cancelled")
+            else:
+                finished = self._store.finish(job_id, status=JobStatus.failed.value, error=str(exc))
             self._log_notification_results(log_path, self._notifier.job_finished(finished))
             return
 
-        finished = self._store.finish(job_id, status="succeeded", result=result)
+        if self._is_cancelled(job_id):
+            finished = self._store.finish(job_id, status=JobStatus.cancelled.value, error="cancelled")
+        else:
+            finished = self._store.finish(job_id, status=JobStatus.succeeded.value, result=result)
         self._log_notification_results(log_path, self._notifier.job_finished(finished))
 
     def _execute(self, job_id: str, payload: JobRequest, log_path: Path) -> dict[str, Any]:
@@ -50,7 +85,7 @@ class JobRunner:
             return self._create_note(job_id, payload, log_path)
         if payload.intent == "repo_status":
             repo = self._resolve_repo(payload.repo)
-            return self._repo_status(repo, log_path)
+            return self._repo_status(job_id, repo, log_path)
         if payload.intent == "script_task":
             repo = self._resolve_repo(payload.repo)
             return self._script_task(job_id, payload, repo, log_path)
@@ -102,23 +137,6 @@ class JobRunner:
         log_path.write_text(f"Created note {note_path}\n", encoding="utf-8")
         return {"note_path": str(note_path)}
 
-    def _repo_status(self, repo: RepoConfig, log_path: Path) -> dict[str, Any]:
-        commands = [
-            ["git", "branch", "--show-current"],
-            ["git", "status", "--short"],
-            ["git", "log", "-1", "--oneline"],
-            ["git", "remote", "-v"],
-        ]
-        result: dict[str, Any] = {"repo": repo.name, "path": str(repo.path), "github_account": repo.github_account}
-        outputs: list[str] = []
-        for command in commands:
-            completed = self._run_command(command, repo.path, timeout_seconds=30, log_path=log_path)
-            key = "_".join(command[1:]).replace("-", "_")
-            result[key] = completed["stdout"].strip()
-            outputs.append(f"$ {shlex.join(command)}\n{completed['stdout']}{completed['stderr']}")
-        result["summary"] = "\n\n".join(outputs)
-        return result
-
     def _script_task(self, job_id: str, payload: JobRequest, repo: RepoConfig, log_path: Path) -> dict[str, Any]:
         script_name = str(payload.metadata.get("script", ""))
         if not script_name:
@@ -129,7 +147,7 @@ class JobRunner:
         if not script.allows_repo(repo.name):
             raise RunnerError(f"script {script_name!r} is not allowed for repo {repo.name!r}")
         command = _render_command(script.command, payload=payload, repo=repo, job_id=job_id)
-        completed = self._run_command(command, repo.path, timeout_seconds=script.timeout_seconds, log_path=log_path)
+        completed = self._run_command(job_id, command, repo.path, timeout_seconds=script.timeout_seconds, log_path=log_path)
         return _command_result(command, completed)
 
     def _tool_task(self, job_id: str, payload: JobRequest, log_path: Path) -> dict[str, Any]:
@@ -143,11 +161,12 @@ class JobRunner:
         if not tool.allows_repo(repo.name):
             raise RunnerError(f"tool {tool_name!r} is not allowed for repo {repo.name!r}")
         command = _render_command(tool.command, payload=payload, repo=repo, job_id=job_id)
-        completed = self._run_command(command, repo.path, timeout_seconds=tool.timeout_seconds, log_path=log_path)
+        completed = self._run_command(job_id, command, repo.path, timeout_seconds=tool.timeout_seconds, log_path=log_path)
         return _command_result(command, completed)
 
     def _run_command(
         self,
+        job_id: str,
         command: list[str],
         cwd: Path,
         *,
@@ -159,40 +178,90 @@ class JobRunner:
             log.write(f"cwd: {cwd}\n\n")
 
         try:
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 command,
                 cwd=str(cwd),
                 text=True,
-                capture_output=True,
-                timeout=timeout_seconds,
-                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 env=os.environ.copy(),
+                start_new_session=True,
             )
         except FileNotFoundError as exc:
             raise RunnerError(f"executable not found: {command[0]}") from exc
-        except subprocess.TimeoutExpired as exc:
-            with log_path.open("a", encoding="utf-8") as log:
-                log.write(exc.stdout or "")
-                log.write(exc.stderr or "")
-                log.write(f"\nCommand timed out after {timeout_seconds} seconds\n")
-            raise RunnerError(f"command timed out after {timeout_seconds} seconds") from exc
+
+        with self._lock:
+            self._processes[job_id] = process
+
+        try:
+            started = time.monotonic()
+            while True:
+                if self._is_cancelled(job_id):
+                    _terminate_process(process)
+                    stdout, stderr = process.communicate(timeout=5)
+                    with log_path.open("a", encoding="utf-8") as log:
+                        log.write(stdout or "")
+                        log.write(stderr or "")
+                        log.write("\nCommand cancelled\n")
+                    raise RunnerCancelled("cancelled")
+                try:
+                    stdout, stderr = process.communicate(timeout=0.25)
+                    break
+                except subprocess.TimeoutExpired:
+                    if time.monotonic() - started > timeout_seconds:
+                        _terminate_process(process)
+                        stdout, stderr = process.communicate(timeout=5)
+                        with log_path.open("a", encoding="utf-8") as log:
+                            log.write(stdout or "")
+                            log.write(stderr or "")
+                            log.write(f"\nCommand timed out after {timeout_seconds} seconds\n")
+                        raise RunnerError(f"command timed out after {timeout_seconds} seconds")
+        finally:
+            with self._lock:
+                self._processes.pop(job_id, None)
+
+        returncode = process.returncode
 
         with log_path.open("a", encoding="utf-8") as log:
-            if completed.stdout:
-                log.write(completed.stdout)
-            if completed.stderr:
+            if stdout:
+                log.write(stdout)
+            if stderr:
                 log.write("\n[stderr]\n")
-                log.write(completed.stderr)
-            log.write(f"\nexit_code: {completed.returncode}\n")
+                log.write(stderr)
+            log.write(f"\nexit_code: {returncode}\n")
 
-        if completed.returncode != 0:
-            raise RunnerError(f"command failed with exit code {completed.returncode}")
+        if returncode != 0:
+            raise RunnerError(f"command failed with exit code {returncode}")
 
         return {
-            "exit_code": completed.returncode,
-            "stdout": completed.stdout,
-            "stderr": completed.stderr,
+            "exit_code": returncode,
+            "stdout": stdout,
+            "stderr": stderr,
         }
+
+    def _repo_status(self, job_id: str, repo: RepoConfig, log_path: Path) -> dict[str, Any]:
+        commands = [
+            ["git", "branch", "--show-current"],
+            ["git", "status", "--short"],
+            ["git", "log", "-1", "--oneline"],
+            ["git", "remote", "-v"],
+        ]
+        result: dict[str, Any] = {"repo": repo.name, "path": str(repo.path), "github_account": repo.github_account}
+        outputs: list[str] = []
+        for command in commands:
+            completed = self._run_command(job_id, command, repo.path, timeout_seconds=30, log_path=log_path)
+            key = "_".join(command[1:]).replace("-", "_")
+            result[key] = completed["stdout"].strip()
+            outputs.append(f"$ {shlex.join(command)}\n{completed['stdout']}{completed['stderr']}")
+        result["summary"] = "\n\n".join(outputs)
+        return result
+
+    def _is_cancelled(self, job_id: str) -> bool:
+        with self._lock:
+            if job_id in self._cancel_requested:
+                return True
+        record = self._store.get(job_id)
+        return bool(record and record["status"] == JobStatus.cancelled.value)
 
     def _log_path(self, job_id: str) -> Path:
         log_dir = self._config.data_dir / "logs"
@@ -254,3 +323,23 @@ def _tail(text: str, limit: int = 6000) -> str:
     if len(text) <= limit:
         return text
     return text[-limit:]
+
+
+def _terminate_process(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except OSError:
+        process.terminate()
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return
+        except OSError:
+            process.kill()

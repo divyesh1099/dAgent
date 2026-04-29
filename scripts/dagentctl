@@ -26,6 +26,7 @@ Usage:
   scripts/dagentctl health [name]           Check /health and /ready
   scripts/dagentctl metrics [name]          Show Prometheus metrics
   scripts/dagentctl overview                Show all workers with health checks
+  scripts/dagentctl dashboard [name]        Print dashboard URL and token
   scripts/dagentctl dlogs-targets           Print Prometheus file_sd targets for dLogs
   scripts/dagentctl jobs [name] [limit]     Show recent jobs
   scripts/dagentctl token [name]            Print the worker API token
@@ -58,6 +59,7 @@ main() {
     health) cmd_health "${1:-main}" ;;
     metrics) cmd_metrics "${1:-main}" ;;
     overview) cmd_overview ;;
+    dashboard) cmd_dashboard "${1:-main}" ;;
     dlogs-targets) cmd_dlogs_targets ;;
     jobs) cmd_jobs "${1:-main}" "${2:-20}" ;;
     token) cmd_token "${1:-main}" ;;
@@ -176,6 +178,17 @@ cmd_metrics() {
   local url="http://${DAGENT_WORKER_HOST}:${DAGENT_WORKER_PORT}"
 
   curl -fsS "$url/metrics"
+}
+
+cmd_dashboard() {
+  local name="$1"
+  load_worker_env "$name"
+  local url="http://${DAGENT_WORKER_HOST}:${DAGENT_WORKER_PORT}/ui"
+  if [[ "$DAGENT_WORKER_HOST" == "0.0.0.0" ]]; then
+    url="http://127.0.0.1:${DAGENT_WORKER_PORT}/ui"
+  fi
+  echo "Dashboard: $url"
+  echo "Token: $DAGENT_WORKER_API_TOKEN"
 }
 
 cmd_overview() {

@@ -55,7 +55,7 @@ class Notifier:
             tags="warning",
         )
 
-    def job_finished(self, job: dict[str, Any]) -> None:
+    def job_finished(self, job: dict[str, Any]) -> list[dict[str, Any]]:
         status = job["status"]
         priority = "high" if status == "failed" else "default"
         tags = "x" if status == "failed" else "white_check_mark"

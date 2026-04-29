@@ -102,6 +102,59 @@ OK: Cloudflare Access appears to be protecting n8n.divyeshvishwakarma.com.
 OK: Cloudflare Access is not blocking /webhook/dagent-watch-capture.
 ```
 
+## dAgent Dashboard Public Hostname
+
+Use a separate protected hostname for the worker dashboard:
+
+```text
+dagent.divyeshvishwakarma.com
+```
+
+In Cloudflare Zero Trust:
+
+```text
+Access controls > Applications > Add an application > Self-hosted
+Name: dAgent Dashboard
+Public hostname: dagent.divyeshvishwakarma.com
+Policy action: Allow
+Include: Emails > divyesh1099@gmail.com
+```
+
+Do not add a Bypass policy for this hostname. The dashboard can stop, retry,
+edit, and requeue jobs, so it should stay behind Cloudflare Access and the
+worker token.
+
+Then add the public hostname to the existing tunnel:
+
+```text
+Networks > Tunnels > <your tunnel> > Public Hostnames > Add a public hostname
+Subdomain: dagent
+Domain: divyeshvishwakarma.com
+Path: leave blank
+Service type: HTTP
+Service URL: 127.0.0.1:8765
+```
+
+This workstation currently runs `cloudflared` as a host system service. If you
+later move `cloudflared` into the Docker Compose container, use this service URL
+instead:
+
+```text
+host.docker.internal:8765
+```
+
+The worker serves the dashboard at both `/` and `/ui`, so this should open:
+
+```text
+https://dagent.divyeshvishwakarma.com/
+```
+
+Use the token printed by:
+
+```bash
+scripts/dagentctl dashboard main
+```
+
 ## Logs
 
 - n8n execution logs: n8n UI and Postgres.

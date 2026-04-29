@@ -1,0 +1,1118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>dAgent Dashboard</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f8fafd;
+      --panel: #ffffff;
+      --line: #e5e7eb;
+      --text: #202124;
+      --muted: #5f6368;
+      --ink: #1f1f1f;
+      --accent: #1a73e8;
+      --accent-soft: #e8f0fe;
+      --warn: #b45309;
+      --danger: #b42318;
+      --ok: #188038;
+      --run: #1967d2;
+      --shadow: 0 1px 2px rgba(60, 64, 67, .18), 0 8px 24px rgba(60, 64, 67, .08);
+      --radius: 14px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+      letter-spacing: 0;
+    }
+
+    button {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--ink);
+      min-height: 36px;
+      border-radius: 999px;
+      padding: 0 14px;
+      cursor: pointer;
+      transition: background .16s ease, border-color .16s ease, box-shadow .16s ease;
+    }
+
+    button:hover {
+      background: #f1f5fb;
+      box-shadow: 0 1px 3px rgba(60, 64, 67, .18);
+    }
+
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: white;
+    }
+
+    button.danger {
+      color: var(--danger);
+      border-color: #f1b8b3;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: .48;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: white;
+      color: var(--text);
+      min-height: 38px;
+      padding: 8px 14px;
+    }
+
+    textarea {
+      min-height: 94px;
+      resize: vertical;
+      border-radius: 12px;
+    }
+
+    pre {
+      margin: 0;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #111827;
+      color: #e5e7eb;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 48vh;
+      line-height: 1.45;
+      font-size: 12px;
+    }
+
+    .toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: grid;
+      grid-template-columns: minmax(150px, 1fr) minmax(220px, 380px) auto;
+      gap: 12px;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid #edf0f5;
+      background: rgba(248, 250, 253, .94);
+      backdrop-filter: blur(12px);
+    }
+
+    .brand {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .brand strong {
+      font-size: 18px;
+      line-height: 1.1;
+      color: var(--ink);
+    }
+
+    .brand span {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .tokenbar {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .tools {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .auto {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .auto input {
+      width: auto;
+      min-height: 0;
+      padding: 0;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: minmax(330px, 36vw) minmax(0, 1fr);
+      gap: 18px;
+      padding: 18px;
+      min-height: calc(100vh - 64px);
+    }
+
+    .pane {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      min-width: 0;
+    }
+
+    .listPane {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      overflow: hidden;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .metric {
+      min-width: 0;
+      padding: 10px;
+      border-radius: 12px;
+      background: #f8fafc;
+    }
+
+    .metric b {
+      display: block;
+      font-size: 22px;
+      color: var(--ink);
+    }
+
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .filters {
+      display: grid;
+      grid-template-columns: 1fr 120px 120px;
+      gap: 10px;
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .jobs {
+      overflow: auto;
+      padding: 10px;
+    }
+
+    .day {
+      padding: 10px 6px 6px;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+
+    .job {
+      display: grid;
+      gap: 9px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 12px;
+      margin-bottom: 10px;
+      background: white;
+      cursor: pointer;
+      transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+    }
+
+    .job:hover {
+      border-color: #cdd6e5;
+      box-shadow: 0 2px 8px rgba(60, 64, 67, .10);
+    }
+
+    .job.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+
+    .jobTop,
+    .jobMeta,
+    .detailHead,
+    .actionbar,
+    .tabs {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .jobTop {
+      justify-content: space-between;
+    }
+
+    .title {
+      color: var(--ink);
+      font-weight: 650;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .task {
+      color: var(--text);
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 0 7px;
+      border-radius: 999px;
+      background: #f1f3f4;
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .succeeded { background: #e6f4ea; color: var(--ok); }
+    .failed { background: #fce8e6; color: var(--danger); }
+    .cancelled, .rejected { background: #f1f3f4; color: #5f6368; }
+    .running { background: #e8f0fe; color: var(--run); }
+    .queued, .approval_required { background: #fef7e0; color: var(--warn); }
+
+    .detailPane {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      overflow: hidden;
+    }
+
+    .detailHead {
+      justify-content: space-between;
+      padding: 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .detailTitle {
+      min-width: 0;
+    }
+
+    .detailTitle h1 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.2;
+      color: var(--ink);
+      overflow-wrap: anywhere;
+    }
+
+    .detailTitle p {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .actionbar {
+      justify-content: flex-end;
+    }
+
+    .tabs {
+      padding: 10px 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .tabs button {
+      min-height: 32px;
+    }
+
+    .tabs button.active {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+    }
+
+    .detailBody {
+      overflow: auto;
+      padding: 18px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .field {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 8px;
+      min-width: 0;
+    }
+
+    .field span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 4px;
+    }
+
+    .field b {
+      display: block;
+      color: var(--ink);
+      overflow-wrap: anywhere;
+    }
+
+    .resultCard,
+    .noteCard,
+    .advancedCard {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: white;
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+
+    .resultCard {
+      background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+    }
+
+    .resultTitle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+
+    .resultTitle h2 {
+      margin: 0;
+      font-size: 16px;
+      color: var(--ink);
+    }
+
+    .noteText {
+      margin: 0;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: var(--text);
+      max-height: none;
+      font-size: 14px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }
+
+    details.advancedCard summary {
+      cursor: pointer;
+      color: var(--ink);
+      font-weight: 650;
+    }
+
+    details.advancedCard pre {
+      margin-top: 12px;
+      max-height: 38vh;
+    }
+
+    .editor {
+      display: grid;
+      gap: 10px;
+      max-width: 920px;
+    }
+
+    .editorGrid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .checkline {
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+      color: var(--muted);
+    }
+
+    .checkline input {
+      width: auto;
+      min-height: 0;
+    }
+
+    .empty,
+    .error {
+      padding: 16px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    .error {
+      color: var(--danger);
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 18px;
+      transform: translateX(-50%);
+      max-width: min(520px, calc(100vw - 24px));
+      background: var(--ink);
+      color: white;
+      border-radius: 6px;
+      padding: 10px 12px;
+      box-shadow: var(--shadow);
+      display: none;
+      z-index: 10;
+    }
+
+    .toast.show {
+      display: block;
+    }
+
+    @media (max-width: 760px) {
+      .toolbar {
+        grid-template-columns: 1fr;
+      }
+
+      .tools {
+        justify-content: flex-start;
+      }
+
+      .shell {
+        grid-template-columns: 1fr;
+      }
+
+      .listPane,
+      .detailPane {
+        min-height: 45vh;
+      }
+    }
+
+    @media (max-width: 430px) {
+      body {
+        font-size: 13px;
+      }
+
+      .toolbar,
+      .shell {
+        padding: 8px;
+      }
+
+      .summary {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .filters,
+      .grid,
+      .editorGrid {
+        grid-template-columns: 1fr;
+      }
+
+      .actionbar {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .actionbar button {
+        width: 100%;
+      }
+
+      .brand span,
+      .desktopOnly {
+        display: none;
+      }
+
+      pre {
+        max-height: 42vh;
+      }
+    }
+
+    @media (max-width: 240px) {
+      .toolbar,
+      .shell,
+      .detailBody,
+      .detailHead {
+        padding: 6px;
+      }
+
+      .tokenbar,
+      .tools,
+      .tabs,
+      .actionbar {
+        display: grid;
+        grid-template-columns: 1fr;
+      }
+
+      .summary,
+      .filters {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="toolbar">
+    <div class="brand">
+      <strong>dAgent Dashboard</strong>
+      <span id="stamp">Results, workers, and watch updates</span>
+    </div>
+    <div class="tokenbar">
+      <input id="token" type="password" autocomplete="off" placeholder="Worker token">
+      <button id="saveToken">Save</button>
+    </div>
+    <div class="tools">
+      <label class="auto"><input id="autoRefresh" type="checkbox" checked> Auto</label>
+      <button id="refresh">Refresh</button>
+      <button id="notifyLatest" class="primary">Watch update</button>
+      <button id="logout" class="danger">Logout</button>
+    </div>
+  </header>
+
+  <main class="shell">
+    <section class="pane listPane">
+      <div class="summary" id="summary"></div>
+      <div class="filters">
+        <input id="search" type="search" placeholder="Search">
+        <select id="workerFilter"></select>
+        <select id="statusFilter"></select>
+      </div>
+      <div class="jobs" id="jobs">
+        <div class="empty">Paste a worker token and refresh.</div>
+      </div>
+    </section>
+
+    <section class="pane detailPane">
+      <div class="detailHead">
+        <div class="detailTitle">
+          <h1 id="detailTitle">No run selected</h1>
+          <p id="detailMeta">Select a run from the timeline.</p>
+        </div>
+        <div class="actionbar">
+          <button id="notifyJob">Watch</button>
+          <button id="retryJob">Retry</button>
+          <button id="stopJob" class="danger">Stop</button>
+          <button id="deleteJob" class="danger">Delete</button>
+          <button id="editJob" class="primary">Edit</button>
+        </div>
+      </div>
+      <div class="tabs">
+        <button data-tab="output" class="active">Output</button>
+        <button data-tab="logs">Logs</button>
+        <button data-tab="edit">Edit</button>
+      </div>
+      <div class="detailBody" id="detailBody">
+        <div class="empty">No output loaded.</div>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const state = {
+      token: localStorage.getItem("dagentDashboardToken") || "",
+      data: {workers: [], jobs: []},
+      selected: null,
+      tab: "output",
+      timer: null
+    };
+
+    const terminal = new Set(["succeeded", "failed", "rejected", "cancelled"]);
+    const byId = (id) => document.getElementById(id);
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    function tokenFromHash() {
+      const raw = location.hash.startsWith("#") ? location.hash.slice(1) : "";
+      const params = new URLSearchParams(raw);
+      return params.get("token") || "";
+    }
+
+    function setToken(value) {
+      state.token = value.trim();
+      byId("token").value = state.token;
+      if (state.token) localStorage.setItem("dagentDashboardToken", state.token);
+    }
+
+    async function api(path, options = {}) {
+      if (!state.token) throw new Error("missing token");
+      const headers = Object.assign({}, options.headers || {}, {
+        Authorization: `Bearer ${state.token}`
+      });
+      let body = options.body;
+      if (body && typeof body !== "string") {
+        body = JSON.stringify(body);
+        headers["Content-Type"] = "application/json";
+      }
+      const response = await fetch(path, Object.assign({}, options, {headers, body}));
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `${response.status} ${response.statusText}`);
+      }
+      if (options.text) return response.text();
+      return response.json();
+    }
+
+    function toast(message) {
+      const node = byId("toast");
+      node.textContent = message;
+      node.classList.add("show");
+      window.clearTimeout(node._timer);
+      node._timer = window.setTimeout(() => node.classList.remove("show"), 3200);
+    }
+
+    function formatTime(value) {
+      if (!value) return "-";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleString([], {month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit"});
+    }
+
+    function dayLabel(value) {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "Unknown";
+      return date.toLocaleDateString([], {weekday: "short", month: "short", day: "2-digit"});
+    }
+
+    function workerOptions() {
+      const selected = byId("workerFilter").value;
+      const workers = ["all"].concat(state.data.workers.map((worker) => worker.name));
+      byId("workerFilter").innerHTML = workers.map((name) => (
+        `<option value="${escapeHtml(name)}">${escapeHtml(name === "all" ? "All workers" : name)}</option>`
+      )).join("");
+      byId("workerFilter").value = workers.includes(selected) ? selected : "all";
+    }
+
+    function statusOptions() {
+      const selected = byId("statusFilter").value;
+      const statuses = Array.from(new Set(state.data.jobs.map((job) => job.status))).sort();
+      const options = ["all"].concat(statuses);
+      byId("statusFilter").innerHTML = options.map((status) => (
+        `<option value="${escapeHtml(status)}">${escapeHtml(status === "all" ? "All status" : status)}</option>`
+      )).join("");
+      byId("statusFilter").value = options.includes(selected) ? selected : "all";
+    }
+
+    function renderSummary() {
+      const jobs = state.data.jobs;
+      const running = jobs.filter((job) => ["running", "queued", "approval_required"].includes(job.status)).length;
+      const failed = jobs.filter((job) => job.status === "failed").length;
+      const workers = state.data.workers.filter((worker) => worker.ok).length;
+      byId("summary").innerHTML = [
+        ["Runs", jobs.length],
+        ["Active", running],
+        ["Failed", failed],
+        ["Workers", workers]
+      ].map(([label, value]) => (
+        `<div class="metric"><b>${value}</b><span>${label}</span></div>`
+      )).join("");
+    }
+
+    function filteredJobs() {
+      const search = byId("search").value.trim().toLowerCase();
+      const worker = byId("workerFilter").value || "all";
+      const status = byId("statusFilter").value || "all";
+      return state.data.jobs.filter((job) => {
+        if (worker !== "all" && job.worker !== worker) return false;
+        if (status !== "all" && job.status !== status) return false;
+        if (!search) return true;
+        const haystack = [job.worker, job.status, job.intent, job.repo, job.tool, job.task_preview, job.id]
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(search);
+      });
+    }
+
+    function renderJobs() {
+      workerOptions();
+      statusOptions();
+      renderSummary();
+      const jobs = filteredJobs();
+      if (!jobs.length) {
+        byId("jobs").innerHTML = '<div class="empty">No runs match the current filters.</div>';
+        return;
+      }
+      let lastDay = "";
+      const html = [];
+      for (const job of jobs) {
+        const day = dayLabel(job.created_at);
+        if (day !== lastDay) {
+          html.push(`<div class="day">${escapeHtml(day)}</div>`);
+          lastDay = day;
+        }
+        const active = state.selected && state.selected.id === job.id && state.selected.worker === job.worker;
+        html.push(`
+          <article class="job ${active ? "active" : ""}" data-worker="${escapeHtml(job.worker)}" data-id="${escapeHtml(job.id)}" tabindex="0">
+            <div class="jobTop">
+              <div class="title">${escapeHtml(job.intent)}</div>
+              <span class="pill ${escapeHtml(job.status)}">${escapeHtml(job.status)}</span>
+            </div>
+            <div class="task">${escapeHtml(job.task_preview)}</div>
+            <div class="jobMeta">
+              <span class="pill">${escapeHtml(job.worker || "-")}</span>
+              <span class="pill">${escapeHtml(formatTime(job.created_at))}</span>
+              ${job.repo ? `<span class="pill">${escapeHtml(job.repo)}</span>` : ""}
+              ${job.source ? `<span class="pill">${escapeHtml(job.source)}</span>` : ""}
+            </div>
+          </article>
+        `);
+      }
+      byId("jobs").innerHTML = html.join("");
+      byId("jobs").querySelectorAll(".job").forEach((node) => {
+        node.addEventListener("click", () => selectJob(node.dataset.worker, node.dataset.id));
+        node.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") selectJob(node.dataset.worker, node.dataset.id);
+        });
+      });
+    }
+
+    function findJob(worker, id) {
+      return state.data.jobs.find((job) => job.worker === worker && job.id === id) || null;
+    }
+
+    function selectJob(worker, id) {
+      state.selected = findJob(worker, id);
+      state.tab = "output";
+      renderJobs();
+      renderDetails();
+    }
+
+    function selectedPath(suffix) {
+      const job = state.selected;
+      return `/v1/dashboard/workers/${encodeURIComponent(job.worker)}/jobs/${encodeURIComponent(job.id)}${suffix}`;
+    }
+
+    function setActions(job) {
+      const disabled = !job;
+      byId("notifyJob").disabled = disabled;
+      byId("retryJob").disabled = disabled;
+      byId("editJob").disabled = disabled;
+      byId("deleteJob").disabled = disabled || !terminal.has(job.status);
+      byId("stopJob").disabled = disabled || terminal.has(job.status);
+    }
+
+    function renderDetails() {
+      const job = state.selected;
+      setActions(job);
+      byId("detailBody").innerHTML = "";
+      if (!job) {
+        byId("detailTitle").textContent = "No run selected";
+        byId("detailMeta").textContent = "Select a run from the timeline.";
+        byId("detailBody").innerHTML = '<div class="empty">No output loaded.</div>';
+        return;
+      }
+      byId("detailTitle").textContent = job.task_preview;
+      byId("detailMeta").textContent = `${job.worker} / ${job.status} / ${formatTime(job.created_at)}`;
+      document.querySelectorAll(".tabs button").forEach((button) => {
+        button.classList.toggle("active", button.dataset.tab === state.tab);
+      });
+      if (state.tab === "logs") {
+        renderLog();
+      } else if (state.tab === "edit") {
+        renderEditor();
+      } else {
+        renderOutput();
+      }
+    }
+
+    async function renderLog() {
+      byId("detailBody").innerHTML = '<div class="empty">Loading logs...</div>';
+      try {
+        const text = await api(selectedPath("/log?tail=80000"), {text: true});
+        byId("detailBody").innerHTML = `<pre>${escapeHtml(text || "No log yet.")}</pre>`;
+      } catch (error) {
+        byId("detailBody").innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    async function renderOutput() {
+      const job = state.selected;
+      const result = job.result || {};
+      const payload = job.payload || {};
+      const resultText = JSON.stringify(result, null, 2);
+      const payloadText = JSON.stringify(payload, null, 2);
+      byId("detailBody").innerHTML = `
+        <section class="resultCard">
+          <div class="resultTitle">
+            <h2>Run result</h2>
+            <span class="pill ${escapeHtml(job.status)}">${escapeHtml(job.status)}</span>
+          </div>
+          <div class="grid">
+            <div class="field"><span>Worker</span><b>${escapeHtml(job.worker)}</b></div>
+            <div class="field"><span>Intent</span><b>${escapeHtml(job.intent)}</b></div>
+            <div class="field"><span>Created</span><b>${escapeHtml(formatTime(job.created_at))}</b></div>
+            <div class="field"><span>Finished</span><b>${escapeHtml(formatTime(job.finished_at))}</b></div>
+          </div>
+        </section>
+        <section class="noteCard">
+          <div class="resultTitle">
+            <h2>Output</h2>
+            ${result.note_path ? `<span class="pill">note saved</span>` : `<span class="pill">live status</span>`}
+          </div>
+          <pre class="noteText" id="noteBlock">Loading output...</pre>
+        </section>
+        <details class="advancedCard">
+          <summary>Details</summary>
+        <div class="grid">
+          <div class="field"><span>Repo</span><b>${escapeHtml(job.repo || "-")}</b></div>
+          <div class="field"><span>Tool</span><b>${escapeHtml(job.tool || "-")}</b></div>
+          <div class="field"><span>Source</span><b>${escapeHtml(job.source || "-")}</b></div>
+          <div class="field"><span>Input</span><b>${escapeHtml(job.input_type || "-")}</b></div>
+          <div class="field"><span>Job ID</span><b>${escapeHtml(job.id)}</b></div>
+          <div class="field"><span>Key</span><b>${escapeHtml(job.idempotency_key || "-")}</b></div>
+        </div>
+        <div class="resultTitle"><h2>Result JSON</h2></div>
+        <pre>${escapeHtml(resultText || "{}")}</pre>
+        <div style="height: 12px"></div>
+        <div class="resultTitle"><h2>Payload</h2></div>
+        <pre>${escapeHtml(payloadText || "{}")}</pre>
+        </details>
+      `;
+      try {
+        const note = await api(selectedPath("/note"), {text: true});
+        byId("noteBlock").textContent = note || summarizeJob(job);
+      } catch (_) {
+        byId("noteBlock").textContent = summarizeJob(job);
+      }
+    }
+
+    function summarizeJob(job) {
+      const lines = [
+        job.task_preview || "No task text.",
+        "",
+        `Status: ${job.status}`,
+        job.error ? `Error: ${job.error}` : "",
+        job.result && job.result.note_path ? `Note: ${job.result.note_path}` : ""
+      ].filter(Boolean);
+      return lines.join("\n");
+    }
+
+    function renderEditor() {
+      const job = state.selected;
+      const payload = job.payload || {};
+      byId("detailBody").innerHTML = `
+        <form class="editor" id="editForm">
+          <textarea id="editTask" placeholder="Task">${escapeHtml(payload.task || job.task_preview || "")}</textarea>
+          <div class="editorGrid">
+            <input id="editIntent" placeholder="Intent" value="${escapeHtml(payload.intent || job.intent || "")}">
+            <input id="editRepo" placeholder="Repo" value="${escapeHtml(payload.repo || "")}">
+            <input id="editTool" placeholder="Tool" value="${escapeHtml(payload.tool || "")}">
+            <select id="editPriority">
+              ${["low", "normal", "high"].map((priority) => `<option value="${priority}" ${payload.priority === priority ? "selected" : ""}>${priority}</option>`).join("")}
+            </select>
+          </div>
+          <textarea id="editMetadata" placeholder="Metadata JSON">${escapeHtml(JSON.stringify(payload.metadata || {}, null, 2))}</textarea>
+          <label class="checkline"><input id="editCancel" type="checkbox"> Stop current run first</label>
+          <div class="actionbar">
+            <button class="primary" type="submit">Run edited task</button>
+          </div>
+        </form>
+      `;
+      byId("editForm").addEventListener("submit", submitEdit);
+    }
+
+    async function submitEdit(event) {
+      event.preventDefault();
+      const body = {
+        task: byId("editTask").value,
+        intent: byId("editIntent").value,
+        priority: byId("editPriority").value,
+        cancel_existing: byId("editCancel").checked
+      };
+      const repo = byId("editRepo").value.trim();
+      const tool = byId("editTool").value.trim();
+      if (repo) body.repo = repo;
+      if (tool) body.tool = tool;
+      try {
+        body.metadata = JSON.parse(byId("editMetadata").value || "{}");
+      } catch (_) {
+        toast("Metadata is not valid JSON.");
+        return;
+      }
+      await action("requeue", {body});
+    }
+
+    async function action(name, options = {}) {
+      const job = state.selected;
+      if (!job) return;
+      try {
+        const response = await api(selectedPath(`/${name}`), {
+          method: "POST",
+          body: options.body || {}
+        });
+        toast(name === "notify" ? "Sent to watch." : "Action complete.");
+        await refresh();
+        const next = response.job || response;
+        if (next && next.id) {
+          state.selected = findJob(next.worker || job.worker, next.id) || state.selected;
+          renderDetails();
+        }
+      } catch (error) {
+        toast(error.message);
+      }
+    }
+
+    async function deleteSelectedJob() {
+      const job = state.selected;
+      if (!job) return;
+      if (!terminal.has(job.status)) {
+        toast("Stop the run before deleting it.");
+        return;
+      }
+      const label = `${job.intent}: ${job.task_preview}`;
+      if (!window.confirm(`Delete this run?\n\n${label}`)) return;
+      try {
+        await api(selectedPath(""), {method: "DELETE"});
+        toast("Run deleted.");
+        state.selected = null;
+        await refresh();
+      } catch (error) {
+        toast(error.message);
+      }
+    }
+
+    async function notifyLatest() {
+      const latest = filteredJobs()[0] || state.data.jobs[0];
+      if (!latest) return;
+      state.selected = latest;
+      await action("notify");
+    }
+
+    async function refresh() {
+      try {
+        byId("stamp").textContent = "Refreshing";
+        const data = await api("/v1/dashboard?limit_per_worker=100");
+        state.data = data;
+        if (state.selected) {
+          state.selected = findJob(state.selected.worker, state.selected.id) || state.selected;
+        } else if (data.jobs.length) {
+          state.selected = data.jobs[0];
+        }
+        renderJobs();
+        renderDetails();
+        byId("stamp").textContent = `Updated ${new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}`;
+      } catch (error) {
+        byId("jobs").innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
+        byId("stamp").textContent = "Refresh failed";
+      }
+    }
+
+    function setAutoRefresh(enabled) {
+      window.clearInterval(state.timer);
+      state.timer = null;
+      if (enabled) {
+        state.timer = window.setInterval(refresh, 8000);
+      }
+    }
+
+    function logout() {
+      localStorage.removeItem("dagentDashboardToken");
+      state.token = "";
+      state.data = {workers: [], jobs: []};
+      state.selected = null;
+      state.tab = "output";
+      byId("token").value = "";
+      byId("autoRefresh").checked = false;
+      setAutoRefresh(false);
+      byId("summary").innerHTML = "";
+      byId("workerFilter").innerHTML = "";
+      byId("statusFilter").innerHTML = "";
+      byId("jobs").innerHTML = '<div class="empty">Logged out. Paste a worker token to reconnect.</div>';
+      byId("stamp").textContent = "Logged out";
+      renderDetails();
+      toast("Logged out.");
+      if (isCloudflareAccessHost()) {
+        window.location.assign("/cdn-cgi/access/logout");
+      }
+    }
+
+    function isCloudflareAccessHost() {
+      return location.protocol === "https:" && !["localhost", "127.0.0.1", "::1"].includes(location.hostname);
+    }
+
+    document.querySelectorAll(".tabs button").forEach((button) => {
+      button.addEventListener("click", () => {
+        state.tab = button.dataset.tab;
+        renderDetails();
+      });
+    });
+    byId("saveToken").addEventListener("click", () => {
+      setToken(byId("token").value);
+      refresh();
+    });
+    byId("token").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        setToken(byId("token").value);
+        refresh();
+      }
+    });
+    byId("refresh").addEventListener("click", refresh);
+    byId("notifyLatest").addEventListener("click", notifyLatest);
+    byId("logout").addEventListener("click", logout);
+    byId("notifyJob").addEventListener("click", () => action("notify"));
+    byId("retryJob").addEventListener("click", () => action("retry"));
+    byId("stopJob").addEventListener("click", () => action("cancel"));
+    byId("deleteJob").addEventListener("click", deleteSelectedJob);
+    byId("editJob").addEventListener("click", () => {
+      state.tab = "edit";
+      renderDetails();
+    });
+    ["search", "workerFilter", "statusFilter"].forEach((id) => {
+      byId(id).addEventListener("input", renderJobs);
+    });
+    byId("autoRefresh").addEventListener("change", (event) => setAutoRefresh(event.target.checked));
+
+    const hashToken = tokenFromHash();
+    if (hashToken) {
+      setToken(hashToken);
+      history.replaceState(null, "", location.pathname + location.search);
+    } else {
+      byId("token").value = state.token;
+    }
+    setAutoRefresh(byId("autoRefresh").checked);
+    if (state.token) refresh();
+  </script>
+</body>
+</html>

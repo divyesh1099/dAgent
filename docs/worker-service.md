@@ -37,6 +37,7 @@ scripts/dagentctl status main
 scripts/dagentctl health main
 scripts/dagentctl jobs main
 scripts/dagentctl logs main
+scripts/dagentctl dashboard main
 ```
 
 The token n8n needs:
@@ -56,6 +57,23 @@ The worker URL from the host is:
 ```text
 http://127.0.0.1:8765
 ```
+
+The dashboard is served by the worker:
+
+```text
+http://127.0.0.1:8765/ui
+```
+
+The same dashboard is also served at the worker root, which is useful behind a
+dedicated hostname:
+
+```text
+http://127.0.0.1:8765/
+```
+
+Paste the token printed by `scripts/dagentctl dashboard main`. The dashboard
+discovers local worker env files under `~/.config/dagent/workers`, so additional
+workers appear automatically once they have their own env file and port.
 
 ## List Workers
 

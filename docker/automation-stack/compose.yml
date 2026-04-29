@@ -108,6 +108,8 @@ services:
       - tunnel
     restart: unless-stopped
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - n8n
 
