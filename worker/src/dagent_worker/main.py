@@ -728,7 +728,10 @@ def _load_idea_document(record: dict[str, Any], config: WorkerConfig) -> dict[st
     if not isinstance(raw, dict):
         raise HTTPException(status_code=500, detail="idea document is not a JSON object")
     base = _default_idea_document(record, config)
-    return _normalize_idea_document({**base, **raw}, record, touch=False)
+    merged = {**base, **raw}
+    if "title" in raw and "title_auto" not in raw:
+        merged["title_auto"] = False
+    return _normalize_idea_document(merged, record, touch=False)
 
 
 def _write_idea_document(document: dict[str, Any], record: dict[str, Any], config: WorkerConfig) -> None:
@@ -742,12 +745,14 @@ def _default_idea_document(record: dict[str, Any], config: WorkerConfig) -> dict
     payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
     task = str(payload.get("task") or record.get("task") or "").strip()
-    title = _clean_short_text(metadata.get("title") or _title_from_task(task), max_length=240) or "Untitled idea"
     note_text = _editable_idea_text(record, config) or task
+    metadata_title = _clean_short_text(metadata.get("title"), max_length=240)
+    title = metadata_title or _title_from_text(note_text)
     return {
         "job_id": record["id"],
         "intent": record["intent"],
         "title": title,
+        "title_auto": not bool(metadata_title),
         "visibility": "private",
         "content_html": _markdownish_to_html(note_text),
         "assets": _file_refs_to_assets(payload.get("files") or []),
@@ -759,8 +764,6 @@ def _default_idea_document(record: dict[str, Any], config: WorkerConfig) -> dict
 
 
 def _normalize_idea_document(data: dict[str, Any], record: dict[str, Any], *, touch: bool) -> dict[str, Any]:
-    payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
-    title = _clean_short_text(data.get("title") or payload.get("task") or record.get("task"), max_length=240) or "Untitled idea"
     visibility = str(data.get("visibility") or "private").strip().lower()
     if visibility not in {"private", "public"}:
         raise HTTPException(status_code=400, detail="visibility must be private or public")
@@ -771,6 +774,13 @@ def _normalize_idea_document(data: dict[str, Any], record: dict[str, Any], *, to
     content_html = _strip_generated_capture_scaffold_html(content_html)
     if not content_html:
         content_html = "<p></p>"
+    title_auto = data.get("title_auto") is True
+    supplied_title = _clean_short_text(data.get("title"), max_length=240)
+    if title_auto or not supplied_title:
+        title = _title_from_content_html(content_html)
+        title_auto = True
+    else:
+        title = supplied_title
 
     raw_assets = data.get("assets") or []
     if not isinstance(raw_assets, list):
@@ -788,6 +798,7 @@ def _normalize_idea_document(data: dict[str, Any], record: dict[str, Any], *, to
         "job_id": record["id"],
         "intent": record["intent"],
         "title": title,
+        "title_auto": title_auto,
         "visibility": visibility,
         "content_html": content_html,
         "assets": assets,
@@ -934,11 +945,21 @@ def _file_refs_to_assets(files: Any) -> list[dict[str, Any]]:
     return assets
 
 
-def _title_from_task(task: str) -> str:
-    first_line = next((line.strip() for line in task.splitlines() if line.strip()), "")
-    if not first_line:
+def _title_from_text(text: str) -> str:
+    source_text = next((line.strip() for line in str(text or "").splitlines() if line.strip()), str(text or ""))
+    plain_text = re.sub(r"\s+", " ", source_text).strip()
+    if not plain_text:
         return "Untitled idea"
-    return first_line[:80]
+    words = plain_text.split()
+    title = " ".join(words[:6])
+    if len(words) > 6:
+        title = title.rstrip(".,;:") + "..."
+    return _clean_short_text(title, max_length=72) or "Untitled idea"
+
+
+def _title_from_content_html(content_html: str) -> str:
+    without_tags = re.sub(r"<[^>]+>", " ", content_html)
+    return _title_from_text(html.unescape(without_tags))
 
 
 def _clean_short_text(value: Any, *, max_length: int) -> str:

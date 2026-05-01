@@ -38,6 +38,7 @@ def test_idea_document_default_and_round_trip(tmp_path: Path) -> None:
 
     default_doc = _load_idea_document(record, config)
     assert default_doc["title"] == "Build a calm editor"
+    assert default_doc["title_auto"] is True
     assert default_doc["assets"][0]["kind"] == "pdf"
 
     saved_doc = _normalize_idea_document(
@@ -54,9 +55,52 @@ def test_idea_document_default_and_round_trip(tmp_path: Path) -> None:
 
     reloaded = _load_idea_document(record, config)
     assert reloaded["title"] == "Detailed idea"
+    assert reloaded["title_auto"] is False
     assert reloaded["visibility"] == "public"
     assert reloaded["content_html"] == "<h2>Plan</h2><p>Ship it.</p>"
     assert reloaded["assets"][0]["kind"] == "sheet"
+
+    store.close()
+
+
+def test_apple_watch_capture_uses_full_text_as_content_and_short_auto_title(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.sqlite3")
+    config = WorkerConfig(
+        data_dir=tmp_path / "worker",
+        notes_dir=tmp_path / "notes",
+        notifications=NotificationConfig(),
+    )
+    capture_text = "Build a tiny launcher that opens recent notes from the watch quickly"
+    record = store.create(
+        payload={
+            "intent": "capture_idea",
+            "task": capture_text,
+            "source": "apple_watch",
+            "input_type": "voice",
+        },
+        status="succeeded",
+        idempotency_key=None,
+        approval_hash=None,
+    )
+
+    default_doc = _load_idea_document(record, config)
+
+    assert capture_text in default_doc["content_html"]
+    assert default_doc["title"] == "Build a tiny launcher that opens..."
+    assert default_doc["title"] != capture_text
+    assert default_doc["title_auto"] is True
+
+    saved_doc = _normalize_idea_document(
+        {
+            **default_doc,
+            "title": "Watch note",
+            "title_auto": False,
+        },
+        record,
+        touch=True,
+    )
+    assert saved_doc["title"] == "Watch note"
+    assert saved_doc["title_auto"] is False
 
     store.close()
 

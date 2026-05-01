@@ -734,6 +734,7 @@
     function prepareDoc(document) {
       const doc = Object.assign({title: "", visibility: "private", content_html: "<p></p>", assets: []}, document || {});
       doc.content_html = compactInlineAssetLinks(stripGeneratedCaptureScaffold(doc.content_html || "<p></p>"));
+      doc.title_auto = doc.title_auto === true || !doc.title;
       doc.assets = Array.isArray(doc.assets) ? doc.assets.map(ensureAsset).filter(Boolean) : [];
       return doc;
     }
@@ -767,10 +768,14 @@
 
     function bindCaptureIdea() {
       byId("docTitle").addEventListener("input", () => {
+        state.doc.title_auto = false;
         byId("screenTitle").textContent = byId("docTitle").value || "Capture idea";
         scheduleSave();
       });
-      byId("editor").addEventListener("input", scheduleSave);
+      byId("editor").addEventListener("input", () => {
+        syncAutoTitleFromEditor();
+        scheduleSave();
+      });
       byId("editor").addEventListener("paste", pasteClean);
       document.querySelectorAll(".toolbar button").forEach((button) => {
         button.addEventListener("click", () => handleTool(button));
@@ -845,6 +850,7 @@
     }
 
     function scheduleSave() {
+      syncAutoTitleFromEditor();
       const saveState = byId("saveState");
       if (saveState) saveState.textContent = "Saving...";
       window.clearTimeout(state.saveTimer);
@@ -857,6 +863,9 @@
       try {
         const saved = await api(workerPath("/idea-document"), {method: "PUT", body});
         state.doc = prepareDoc(saved);
+        const titleInput = byId("docTitle");
+        if (titleInput) titleInput.value = state.doc.title || "";
+        byId("screenTitle").textContent = state.doc.title || "Capture idea";
         byId("screenMeta").textContent = `${state.worker} / ${state.doc.visibility} / ${formatTime(state.doc.updated_at)}`;
         const saveState = byId("saveState");
         if (saveState) saveState.textContent = `Saved ${new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}`;
@@ -871,8 +880,10 @@
 
     function collectDoc() {
       const editorHtml = byId("editor") ? byId("editor").innerHTML : state.doc.content_html;
+      const title = state.doc.title_auto ? titleFromHtml(editorHtml) : (byId("docTitle") ? byId("docTitle").value.trim() : state.doc.title);
       return Object.assign({}, state.doc, {
-        title: byId("docTitle") ? byId("docTitle").value.trim() : state.doc.title,
+        title,
+        title_auto: state.doc.title_auto === true,
         visibility: state.doc.visibility === "public" ? "public" : "private",
         content_html: sanitizeHtml(compactInlineAssetLinks(editorHtml)),
         assets: state.doc.assets || []
@@ -1075,6 +1086,30 @@
       if (bytes < 1024) return `${bytes} B`;
       if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
       return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    }
+
+    function syncAutoTitleFromEditor() {
+      if (!state.doc || state.doc.title_auto !== true) return;
+      const editor = byId("editor");
+      const title = titleFromHtml(editor ? editor.innerHTML : state.doc.content_html);
+      state.doc.title = title;
+      const titleInput = byId("docTitle");
+      if (titleInput) titleInput.value = title;
+      byId("screenTitle").textContent = title || "Capture idea";
+    }
+
+    function titleFromHtml(markup) {
+      const template = document.createElement("template");
+      template.innerHTML = sanitizeHtml(compactInlineAssetLinks(markup || ""));
+      const blocks = Array.from(template.content.querySelectorAll("h1,h2,h3,h4,p,blockquote,li"))
+        .map((node) => (node.textContent || "").replace(/\s+/g, " ").trim())
+        .filter(Boolean);
+      const text = (blocks[0] || template.content.textContent || "").replace(/\s+/g, " ").trim();
+      if (!text) return "Untitled idea";
+      const words = text.split(" ");
+      let title = words.slice(0, 6).join(" ");
+      if (words.length > 6) title = `${title.replace(/[.,;:]$/, "")}...`;
+      return title.slice(0, 72) || "Untitled idea";
     }
 
     function shortError(message) {
