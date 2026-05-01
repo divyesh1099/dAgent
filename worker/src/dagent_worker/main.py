@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
+import html
 import json
 import os
 from pathlib import Path
+import re
+import secrets
 import time
 from typing import Any
 from urllib import request as urlrequest
@@ -16,7 +19,7 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response, st
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from .config import WorkerConfig, load_config
-from .jobs import JobStore
+from .jobs import JobStore, utc_now
 from .metrics import render_metrics
 from .notifier import Notifier
 from .runner import JobRunner
@@ -25,6 +28,14 @@ from .security import bearer_token_matches, hash_secret, make_approval_code, ver
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+IDEA_DOCUMENT_INTENTS = {"capture_idea"}
+IDEA_DOCUMENT_MAX_HTML_BYTES = 2_000_000
+IDEA_DOCUMENT_MAX_ASSET_BYTES = 2_500_000
+SHARE_VISIBILITIES = {"private", "public"}
+INLINE_DATA_ATTACHMENT_LINK_RE = re.compile(
+    r"<a\b[^>]*\bhref\s*=\s*([\"'])data:(?:application/(?:pdf|vnd\.|msword|octet-stream)|text/(?:csv|plain|markdown))[^\"']*\1[^>]*>(.*?)</a>",
+    flags=re.IGNORECASE | re.DOTALL,
+)
 
 
 @asynccontextmanager
@@ -75,6 +86,39 @@ def health() -> dict[str, Any]:
 def dashboard_ui() -> HTMLResponse:
     dashboard_path = STATIC_DIR / "dashboard.html"
     return HTMLResponse(dashboard_path.read_text(encoding="utf-8"))
+
+
+@app.get("/ui/detail", response_class=HTMLResponse)
+@app.get("/ui/detail/", response_class=HTMLResponse)
+def job_detail_ui() -> HTMLResponse:
+    detail_path = STATIC_DIR / "detail.html"
+    return HTMLResponse(detail_path.read_text(encoding="utf-8"))
+
+
+@app.get("/public/share/{worker_name}/{share_id}", response_class=HTMLResponse)
+def dashboard_public_share(worker_name: str, share_id: str, request: Request) -> HTMLResponse:
+    worker = _find_worker(request.app, worker_name)
+    share = _worker_request_json(worker, "GET", f"/v1/shares/{quote(share_id)}?visibility=public")
+    return HTMLResponse(_render_share_html(share, worker_name=worker_name))
+
+
+@app.get("/private/share/{worker_name}/{share_id}", response_class=HTMLResponse)
+def dashboard_private_share(worker_name: str, share_id: str, request: Request) -> HTMLResponse:
+    worker = _find_worker(request.app, worker_name)
+    share = _worker_request_json(worker, "GET", f"/v1/shares/{quote(share_id)}?visibility=private")
+    return HTMLResponse(_render_share_html(share, worker_name=worker_name))
+
+
+@app.get("/public/share/{share_id}", response_class=HTMLResponse)
+def public_share(share_id: str, request: Request) -> HTMLResponse:
+    share = _load_share(request.app.state.config, share_id, visibility="public")
+    return HTMLResponse(_render_share_html(share, worker_name=request.app.state.worker_name))
+
+
+@app.get("/private/share/{share_id}", response_class=HTMLResponse)
+def private_share(share_id: str, request: Request) -> HTMLResponse:
+    share = _load_share(request.app.state.config, share_id, visibility="private")
+    return HTMLResponse(_render_share_html(share, worker_name=request.app.state.worker_name))
 
 
 @app.get("/metrics")
@@ -187,6 +231,65 @@ def get_job_note(job_id: str, request: Request, _auth: None = Depends(require_au
     if not _is_relative_to(path, root):
         raise HTTPException(status_code=403, detail="note path is outside worker notes directory")
     return PlainTextResponse(_read_tail(path, 120000))
+
+
+@app.get("/v1/jobs/{job_id}/idea-document")
+def get_idea_document(job_id: str, request: Request, _auth: None = Depends(require_auth_sync)) -> dict[str, Any]:
+    store: JobStore = request.app.state.store
+    record = store.get(job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    _ensure_idea_document_job(record)
+    config: WorkerConfig = request.app.state.config
+    return _load_idea_document(record, config)
+
+
+@app.put("/v1/jobs/{job_id}/idea-document")
+def put_idea_document(
+    job_id: str,
+    request: Request,
+    body: dict[str, Any] = Body(default_factory=dict),
+    _auth: None = Depends(require_auth_sync),
+) -> dict[str, Any]:
+    store: JobStore = request.app.state.store
+    record = store.get(job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    _ensure_idea_document_job(record)
+    config: WorkerConfig = request.app.state.config
+    document = _normalize_idea_document(body, record, touch=True)
+    _write_idea_document(document, record, config)
+    return document
+
+
+@app.post("/v1/jobs/{job_id}/shares")
+def create_job_share(
+    job_id: str,
+    request: Request,
+    body: dict[str, Any] = Body(default_factory=dict),
+    _auth: None = Depends(require_auth_sync),
+) -> dict[str, Any]:
+    store: JobStore = request.app.state.store
+    record = store.get(job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    _ensure_idea_document_job(record)
+    config: WorkerConfig = request.app.state.config
+    visibility = _share_visibility(body.get("visibility"))
+    document = _load_idea_document(record, config)
+    share = _create_share(record, document, config, visibility=visibility)
+    share["url_path"] = f"/{visibility}/share/{share['id']}"
+    return share
+
+
+@app.get("/v1/shares/{share_id}")
+def get_share(
+    share_id: str,
+    request: Request,
+    visibility: str | None = None,
+    _auth: None = Depends(require_auth_sync),
+) -> dict[str, Any]:
+    return _load_share(request.app.state.config, share_id, visibility=visibility)
 
 
 @app.post("/v1/jobs/{job_id}/cancel", response_model=JobResponse)
@@ -318,11 +421,60 @@ def dashboard_worker_log(
     return PlainTextResponse(text)
 
 
+@app.get("/v1/dashboard/workers/{worker_name}/jobs/{job_id}")
+def dashboard_worker_job(worker_name: str, job_id: str, request: Request, _auth: None = Depends(require_auth_sync)) -> dict[str, Any]:
+    worker = _find_worker(request.app, worker_name)
+    job = _worker_request_json(worker, "GET", f"/v1/jobs/{quote(job_id)}")
+    if isinstance(job, dict):
+        job["worker"] = worker_name
+    return job
+
+
 @app.get("/v1/dashboard/workers/{worker_name}/jobs/{job_id}/note", response_class=PlainTextResponse)
 def dashboard_worker_note(worker_name: str, job_id: str, request: Request, _auth: None = Depends(require_auth_sync)) -> PlainTextResponse:
     worker = _find_worker(request.app, worker_name)
     text = _worker_request_text(worker, "GET", f"/v1/jobs/{quote(job_id)}/note")
     return PlainTextResponse(text)
+
+
+@app.get("/v1/dashboard/workers/{worker_name}/jobs/{job_id}/idea-document")
+def dashboard_worker_idea_document(
+    worker_name: str,
+    job_id: str,
+    request: Request,
+    _auth: None = Depends(require_auth_sync),
+) -> dict[str, Any]:
+    worker = _find_worker(request.app, worker_name)
+    return _worker_request_json(worker, "GET", f"/v1/jobs/{quote(job_id)}/idea-document")
+
+
+@app.put("/v1/dashboard/workers/{worker_name}/jobs/{job_id}/idea-document")
+def dashboard_worker_put_idea_document(
+    worker_name: str,
+    job_id: str,
+    request: Request,
+    body: dict[str, Any] = Body(default_factory=dict),
+    _auth: None = Depends(require_auth_sync),
+) -> dict[str, Any]:
+    worker = _find_worker(request.app, worker_name)
+    return _worker_request_json(worker, "PUT", f"/v1/jobs/{quote(job_id)}/idea-document", body)
+
+
+@app.post("/v1/dashboard/workers/{worker_name}/jobs/{job_id}/shares")
+def dashboard_worker_create_share(
+    worker_name: str,
+    job_id: str,
+    request: Request,
+    body: dict[str, Any] = Body(default_factory=dict),
+    _auth: None = Depends(require_auth_sync),
+) -> dict[str, Any]:
+    visibility = _share_visibility(body.get("visibility"))
+    worker = _find_worker(request.app, worker_name)
+    share = _worker_request_json(worker, "POST", f"/v1/jobs/{quote(job_id)}/shares", {"visibility": visibility})
+    if isinstance(share, dict):
+        share["worker"] = worker_name
+        share["url_path"] = f"/{visibility}/share/{quote(worker_name)}/{quote(str(share.get('id', '')))}"
+    return share
 
 
 @app.post("/v1/dashboard/workers/{worker_name}/jobs/{job_id}/cancel")
@@ -549,6 +701,566 @@ def _delete_job_log(record: dict[str, Any], config: WorkerConfig) -> bool:
     except FileNotFoundError:
         return False
     return True
+
+
+def _ensure_idea_document_job(record: dict[str, Any]) -> None:
+    if record.get("intent") not in IDEA_DOCUMENT_INTENTS:
+        raise HTTPException(status_code=409, detail="this job does not have an idea document")
+
+
+def _idea_document_path(config: WorkerConfig, job_id: str) -> Path:
+    root = (config.notes_dir / ".dagent-idea-docs").resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    path = (root / f"{job_id}.json").resolve()
+    if not _is_relative_to(path, root):
+        raise HTTPException(status_code=403, detail="idea document path is outside notes directory")
+    return path
+
+
+def _load_idea_document(record: dict[str, Any], config: WorkerConfig) -> dict[str, Any]:
+    path = _idea_document_path(config, str(record["id"]))
+    if not path.exists():
+        return _default_idea_document(record, config)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail="idea document is not valid JSON") from exc
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=500, detail="idea document is not a JSON object")
+    base = _default_idea_document(record, config)
+    return _normalize_idea_document({**base, **raw}, record, touch=False)
+
+
+def _write_idea_document(document: dict[str, Any], record: dict[str, Any], config: WorkerConfig) -> None:
+    path = _idea_document_path(config, str(record["id"]))
+    tmp_path = path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(document, indent=2, sort_keys=True), encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def _default_idea_document(record: dict[str, Any], config: WorkerConfig) -> dict[str, Any]:
+    payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    task = str(payload.get("task") or record.get("task") or "").strip()
+    title = _clean_short_text(metadata.get("title") or _title_from_task(task), max_length=240) or "Untitled idea"
+    note_text = _editable_idea_text(record, config) or task
+    return {
+        "job_id": record["id"],
+        "intent": record["intent"],
+        "title": title,
+        "visibility": "private",
+        "content_html": _markdownish_to_html(note_text),
+        "assets": _file_refs_to_assets(payload.get("files") or []),
+        "capture": _idea_document_context(record),
+        "created_at": record.get("created_at") or utc_now(),
+        "updated_at": record.get("updated_at") or utc_now(),
+        "source_note": _note_path_for_record(record, config),
+    }
+
+
+def _normalize_idea_document(data: dict[str, Any], record: dict[str, Any], *, touch: bool) -> dict[str, Any]:
+    payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+    title = _clean_short_text(data.get("title") or payload.get("task") or record.get("task"), max_length=240) or "Untitled idea"
+    visibility = str(data.get("visibility") or "private").strip().lower()
+    if visibility not in {"private", "public"}:
+        raise HTTPException(status_code=400, detail="visibility must be private or public")
+
+    content_html = _strip_inline_data_attachment_links(str(data.get("content_html") or "").strip())
+    if len(content_html.encode("utf-8")) > IDEA_DOCUMENT_MAX_HTML_BYTES:
+        raise HTTPException(status_code=413, detail="idea document is too large")
+    content_html = _strip_generated_capture_scaffold_html(content_html)
+    if not content_html:
+        content_html = "<p></p>"
+
+    raw_assets = data.get("assets") or []
+    if not isinstance(raw_assets, list):
+        raise HTTPException(status_code=400, detail="assets must be a list")
+
+    assets: list[dict[str, Any]] = []
+    for raw_asset in raw_assets[:80]:
+        if not isinstance(raw_asset, dict):
+            continue
+        asset = _normalize_idea_asset(raw_asset)
+        if asset:
+            assets.append(asset)
+
+    return {
+        "job_id": record["id"],
+        "intent": record["intent"],
+        "title": title,
+        "visibility": visibility,
+        "content_html": content_html,
+        "assets": assets,
+        "capture": _idea_document_context(record),
+        "created_at": _clean_short_text(data.get("created_at") or record.get("created_at") or utc_now(), max_length=80),
+        "updated_at": utc_now() if touch else _clean_short_text(data.get("updated_at") or record.get("updated_at") or utc_now(), max_length=80),
+        "source_note": _clean_short_text(data.get("source_note") or _note_path_for_record(record, None), max_length=2000),
+    }
+
+
+def _normalize_idea_asset(raw_asset: dict[str, Any]) -> dict[str, Any] | None:
+    asset: dict[str, Any] = {}
+    for key, limit in {
+        "id": 120,
+        "kind": 40,
+        "name": 240,
+        "url": 4000,
+        "mime_type": 160,
+        "note": 1000,
+    }.items():
+        value = raw_asset.get(key)
+        if value is not None:
+            cleaned = _clean_short_text(value, max_length=limit)
+            if cleaned:
+                asset[key] = cleaned
+    size = raw_asset.get("size")
+    if isinstance(size, int | float) and size >= 0:
+        asset["size"] = int(size)
+    data_url = raw_asset.get("data_url")
+    if isinstance(data_url, str) and data_url.startswith("data:"):
+        if len(data_url.encode("utf-8")) > IDEA_DOCUMENT_MAX_ASSET_BYTES:
+            raise HTTPException(status_code=413, detail=f"asset {asset.get('name') or ''} is too large")
+        asset["data_url"] = data_url
+    if not (asset.get("name") or asset.get("url") or asset.get("data_url")):
+        return None
+    asset["kind"] = _clean_short_text(asset.get("kind") or _kind_from_asset(asset), max_length=40) or "file"
+    return asset
+
+
+def _strip_inline_data_attachment_links(content_html: str) -> str:
+    return INLINE_DATA_ATTACHMENT_LINK_RE.sub(lambda match: f"<span>{match.group(2)}</span>", content_html)
+
+
+def _read_note_text(record: dict[str, Any], config: WorkerConfig) -> str:
+    note_path = _note_path_for_record(record, config)
+    if not note_path:
+        return ""
+    path = Path(note_path).expanduser().resolve()
+    return _read_tail(path, 200000)
+
+
+def _editable_idea_text(record: dict[str, Any], config: WorkerConfig) -> str:
+    payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+    task = str(payload.get("task") or record.get("task") or "").strip()
+    note_text = _read_note_text(record, config)
+    if not note_text:
+        return task
+    return _extract_markdown_section(note_text, "Task") or task or note_text
+
+
+def _extract_markdown_section(text: str, heading: str) -> str:
+    lines = text.splitlines()
+    start: int | None = None
+    target = heading.strip().lower()
+    for index, line in enumerate(lines):
+        if line.strip().lower() == f"## {target}":
+            start = index + 1
+            break
+    if start is None:
+        return ""
+
+    end = len(lines)
+    for index in range(start, len(lines)):
+        stripped = lines[index].strip()
+        if stripped.startswith("## ") and stripped.lower() != f"## {target}":
+            end = index
+            break
+    return "\n".join(lines[start:end]).strip()
+
+
+def _strip_generated_capture_scaffold_html(content_html: str) -> str:
+    stripped = content_html.strip()
+    if not re.search(r"<h1>\s*Capture Idea\s*</h1>", stripped, flags=re.IGNORECASE):
+        return content_html
+
+    match = re.search(
+        r"<h2>\s*Task\s*</h2>(.*?)(?=<h2\b[^>]*>.*?</h2>|$)",
+        stripped,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return content_html
+
+    generated_header = stripped[: match.start()]
+    if not all(marker in generated_header for marker in ("Job:", "Source:", "Input:")):
+        return content_html
+
+    return match.group(1).strip() or "<p></p>"
+
+
+def _idea_document_context(record: dict[str, Any]) -> dict[str, str]:
+    payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+    return {
+        "label": record.get("intent", "").replace("_", " ").title(),
+        "job_id": str(record.get("id") or ""),
+        "created_at": str(record.get("created_at") or ""),
+        "source": str(payload.get("source") or ""),
+        "input_type": str(payload.get("input_type") or ""),
+    }
+
+
+def _note_path_for_record(record: dict[str, Any], config: WorkerConfig | None) -> str:
+    result = record.get("result") or {}
+    note_path = result.get("note_path") if isinstance(result, dict) else None
+    if not note_path:
+        return ""
+    if config is None:
+        return str(note_path)
+    root = config.notes_dir.resolve()
+    path = Path(str(note_path)).expanduser().resolve()
+    if not _is_relative_to(path, root):
+        return ""
+    return str(path)
+
+
+def _file_refs_to_assets(files: Any) -> list[dict[str, Any]]:
+    if not isinstance(files, list):
+        return []
+    assets: list[dict[str, Any]] = []
+    for index, file_ref in enumerate(files[:80]):
+        if not isinstance(file_ref, dict):
+            continue
+        url = file_ref.get("url") or file_ref.get("path") or ""
+        name = file_ref.get("name") or url or f"file-{index + 1}"
+        mime_type = _clean_short_text(file_ref.get("mime_type") or "", max_length=160)
+        asset = {
+            "id": f"file-{index + 1}",
+            "kind": _kind_from_mime_or_name(mime_type, str(name)),
+            "name": _clean_short_text(name, max_length=240),
+            "url": _clean_short_text(url, max_length=4000),
+            "mime_type": mime_type,
+        }
+        assets.append({key: value for key, value in asset.items() if value})
+    return assets
+
+
+def _title_from_task(task: str) -> str:
+    first_line = next((line.strip() for line in task.splitlines() if line.strip()), "")
+    if not first_line:
+        return "Untitled idea"
+    return first_line[:80]
+
+
+def _clean_short_text(value: Any, *, max_length: int) -> str:
+    text = str(value or "").strip()
+    if len(text) > max_length:
+        return text[:max_length]
+    return text
+
+
+def _markdownish_to_html(text: str) -> str:
+    if not text.strip():
+        return "<p></p>"
+
+    output: list[str] = []
+    paragraph: list[str] = []
+    in_code = False
+    code_lines: list[str] = []
+    in_list = False
+
+    def flush_paragraph() -> None:
+        if paragraph:
+            output.append(f"<p>{html.escape(' '.join(paragraph))}</p>")
+            paragraph.clear()
+
+    def close_list() -> None:
+        nonlocal in_list
+        if in_list:
+            output.append("</ul>")
+            in_list = False
+
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            flush_paragraph()
+            close_list()
+            if in_code:
+                output.append(f"<pre><code>{html.escape(chr(10).join(code_lines))}</code></pre>")
+                code_lines = []
+                in_code = False
+            else:
+                in_code = True
+            continue
+        if in_code:
+            code_lines.append(line)
+            continue
+        if not stripped:
+            flush_paragraph()
+            close_list()
+            continue
+        if stripped.startswith("# "):
+            flush_paragraph()
+            close_list()
+            output.append(f"<h1>{html.escape(stripped[2:].strip())}</h1>")
+            continue
+        if stripped.startswith("## "):
+            flush_paragraph()
+            close_list()
+            output.append(f"<h2>{html.escape(stripped[3:].strip())}</h2>")
+            continue
+        if stripped.startswith("### "):
+            flush_paragraph()
+            close_list()
+            output.append(f"<h3>{html.escape(stripped[4:].strip())}</h3>")
+            continue
+        if stripped.startswith("- "):
+            flush_paragraph()
+            if not in_list:
+                output.append("<ul>")
+                in_list = True
+            output.append(f"<li>{html.escape(stripped[2:].strip())}</li>")
+            continue
+        paragraph.append(stripped)
+
+    flush_paragraph()
+    close_list()
+    if in_code:
+        output.append(f"<pre><code>{html.escape(chr(10).join(code_lines))}</code></pre>")
+    return "\n".join(output) or "<p></p>"
+
+
+def _kind_from_asset(asset: dict[str, Any]) -> str:
+    return _kind_from_mime_or_name(str(asset.get("mime_type") or ""), str(asset.get("name") or asset.get("url") or ""))
+
+
+def _kind_from_mime_or_name(mime_type: str, name: str) -> str:
+    lower_mime = mime_type.lower()
+    lower_name = name.lower()
+    if lower_mime.startswith("image/") or lower_name.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".svg")):
+        return "image"
+    if lower_mime.startswith("video/") or lower_name.endswith((".mp4", ".mov", ".webm", ".m4v")):
+        return "video"
+    if lower_mime == "application/pdf" or lower_name.endswith(".pdf"):
+        return "pdf"
+    if "spreadsheet" in lower_mime or lower_name.endswith((".xls", ".xlsx", ".csv", ".numbers")):
+        return "sheet"
+    if lower_name.endswith((".md", ".markdown")):
+        return "markdown"
+    return "file"
+
+
+def _share_visibility(value: Any) -> str:
+    visibility = str(value or "private").strip().lower()
+    if visibility not in SHARE_VISIBILITIES:
+        raise HTTPException(status_code=400, detail="visibility must be private or public")
+    return visibility
+
+
+def _share_root(config: WorkerConfig) -> Path:
+    root = (config.notes_dir / ".dagent-shares").resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _share_path(config: WorkerConfig, share_id: str) -> Path:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{16,120}", share_id):
+        raise HTTPException(status_code=404, detail="share not found")
+    root = _share_root(config)
+    path = (root / f"{share_id}.json").resolve()
+    if not _is_relative_to(path, root):
+        raise HTTPException(status_code=403, detail="share path is outside notes directory")
+    return path
+
+
+def _create_share(
+    record: dict[str, Any],
+    document: dict[str, Any],
+    config: WorkerConfig,
+    *,
+    visibility: str,
+) -> dict[str, Any]:
+    now = utc_now()
+    share_id = secrets.token_urlsafe(24)
+    share = {
+        "id": share_id,
+        "visibility": visibility,
+        "job_id": record["id"],
+        "intent": record["intent"],
+        "title": _clean_short_text(document.get("title") or record.get("task") or "Untitled idea", max_length=240),
+        "content_html": _strip_generated_capture_scaffold_html(
+            _strip_inline_data_attachment_links(str(document.get("content_html") or "<p></p>"))
+        ),
+        "assets": document.get("assets") if isinstance(document.get("assets"), list) else [],
+        "capture": _idea_document_context(record),
+        "created_at": now,
+        "updated_at": now,
+    }
+    path = _share_path(config, share_id)
+    tmp_path = path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(share, indent=2, sort_keys=True), encoding="utf-8")
+    tmp_path.replace(path)
+    return share
+
+
+def _load_share(config: WorkerConfig, share_id: str, visibility: str | None = None) -> dict[str, Any]:
+    expected_visibility = _share_visibility(visibility) if visibility else None
+    path = _share_path(config, share_id)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="share not found")
+    try:
+        share = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail="share is not valid JSON") from exc
+    if not isinstance(share, dict):
+        raise HTTPException(status_code=500, detail="share is not a JSON object")
+    actual_visibility = _share_visibility(share.get("visibility"))
+    if expected_visibility and actual_visibility != expected_visibility:
+        raise HTTPException(status_code=404, detail="share not found")
+    share["visibility"] = actual_visibility
+    share["content_html"] = _strip_generated_capture_scaffold_html(
+        _strip_inline_data_attachment_links(str(share.get("content_html") or "<p></p>"))
+    )
+    return share
+
+
+def _render_share_html(share: dict[str, Any], *, worker_name: str) -> str:
+    title = html.escape(str(share.get("title") or "Untitled idea"))
+    visibility = html.escape(str(share.get("visibility") or "private"))
+    content = str(share.get("content_html") or "<p></p>")
+    assets = _render_share_assets_html(share.get("assets"))
+    capture = share.get("capture") if isinstance(share.get("capture"), dict) else {}
+    created = html.escape(str(share.get("created_at") or ""))
+    source = html.escape(str(capture.get("source") or "-"))
+    input_type = html.escape(str(capture.get("input_type") or "-"))
+    worker = html.escape(worker_name)
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data:; media-src https: data:; frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+  <title>{title}</title>
+  <style>
+    :root {{ color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
+    body {{ margin: 0; background: #f6f7f9; color: #202124; }}
+    main {{ max-width: 820px; margin: 0 auto; padding: 44px 20px 64px; }}
+    article {{ background: white; border: 1px solid #e5e7eb; border-radius: 18px; padding: clamp(20px, 4vw, 42px); box-shadow: 0 1px 2px rgba(60,64,67,.14), 0 12px 32px rgba(60,64,67,.08); }}
+    h1 {{ margin: 0 0 18px; color: #111827; font-size: clamp(28px, 5vw, 44px); line-height: 1.12; }}
+    .meta {{ display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 28px; color: #667085; font-size: 12px; }}
+    .pill {{ display: inline-flex; min-height: 24px; align-items: center; border-radius: 999px; background: #f1f3f4; padding: 0 9px; }}
+    .content {{ font-size: 16px; line-height: 1.72; overflow-wrap: anywhere; }}
+    .content h1, .content h2, .content h3 {{ color: #111827; line-height: 1.22; margin: 24px 0 10px; }}
+    .content p, .content ul, .content ol, .content blockquote, .content pre {{ margin: 0 0 14px; }}
+    .content blockquote {{ border-left: 3px solid #1a73e8; color: #667085; padding-left: 14px; }}
+    .content pre {{ background: #111827; color: #e5e7eb; padding: 14px; border-radius: 12px; overflow: auto; }}
+    .content img, .content video, .content iframe {{ display: block; max-width: 100%; border: 1px solid #e5e7eb; border-radius: 12px; background: #f8fafc; margin: 12px 0 16px; }}
+    .content iframe {{ width: 100%; aspect-ratio: 16 / 9; }}
+    .content table {{ width: 100%; border-collapse: collapse; margin: 12px 0 16px; font-size: 14px; }}
+    .content th, .content td {{ border: 1px solid #e5e7eb; padding: 8px; text-align: left; }}
+    .assets {{ margin: 0 0 28px; padding: 0 0 24px; border-bottom: 1px solid #e5e7eb; }}
+    .assets h2 {{ margin: 0 0 12px; color: #111827; font-size: 18px; }}
+    .asset-list {{ display: grid; gap: 10px; }}
+    .asset {{ display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; gap: 10px; align-items: center; border: 1px solid #e5e7eb; border-radius: 12px; padding: 10px; background: #fbfcff; }}
+    .asset-kind {{ display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: #eef4ff; color: #1a73e8; font-size: 10px; font-weight: 750; text-transform: uppercase; }}
+    .asset-name {{ color: #111827; font-weight: 650; overflow-wrap: anywhere; }}
+    .asset-meta {{ display: block; color: #667085; font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }}
+    .asset-link {{ display: inline-flex; align-items: center; min-height: 32px; border: 1px solid #d0d7e2; border-radius: 999px; padding: 0 12px; background: white; text-decoration: none; white-space: nowrap; }}
+    .asset-unavailable {{ color: #667085; font-size: 12px; white-space: nowrap; }}
+    a {{ color: #1a73e8; }}
+    @media (max-width: 560px) {{ .asset {{ grid-template-columns: 36px minmax(0, 1fr); }} .asset-link, .asset-unavailable {{ grid-column: 2; width: max-content; }} }}
+  </style>
+</head>
+<body>
+  <main>
+    <article>
+      <h1>{title}</h1>
+      <div class="meta">
+        <span class="pill">{visibility}</span>
+        <span class="pill">{worker}</span>
+        <span class="pill">{source}</span>
+        <span class="pill">{input_type}</span>
+        <span class="pill">{created}</span>
+      </div>
+      {assets}
+      <div class="content">{content}</div>
+    </article>
+  </main>
+</body>
+</html>"""
+
+
+def _render_share_assets_html(raw_assets: Any) -> str:
+    if not isinstance(raw_assets, list) or not raw_assets:
+        return ""
+
+    items: list[str] = []
+    for raw_asset in raw_assets[:80]:
+        if not isinstance(raw_asset, dict):
+            continue
+        kind = html.escape(str(raw_asset.get("kind") or _kind_from_asset(raw_asset) or "file"))
+        name = html.escape(str(raw_asset.get("name") or raw_asset.get("url") or "Untitled attachment"))
+        mime_type = str(raw_asset.get("mime_type") or "").strip()
+        size = raw_asset.get("size")
+        meta_parts = [kind]
+        if mime_type:
+            meta_parts.append(mime_type)
+        if isinstance(size, int | float) and size >= 0:
+            meta_parts.append(_format_bytes(int(size)))
+        if raw_asset.get("data_url"):
+            meta_parts.append("embedded attachment")
+        elif _is_external_share_url(str(raw_asset.get("url") or "")):
+            meta_parts.append(_url_host(str(raw_asset.get("url") or "")))
+        elif raw_asset.get("url"):
+            meta_parts.append("local reference")
+
+        href = _share_asset_href(raw_asset)
+        action = (
+            f'<a class="asset-link" href="{html.escape(href)}" target="_blank" rel="noopener noreferrer" download="{name}">Open</a>'
+            if href
+            else '<span class="asset-unavailable">No public link</span>'
+        )
+        items.append(
+            f"""
+        <div class="asset">
+          <span class="asset-kind">{kind[:4]}</span>
+          <div>
+            <div class="asset-name">{name}</div>
+            <span class="asset-meta">{html.escape(' / '.join(part for part in meta_parts if part))}</span>
+          </div>
+          {action}
+        </div>"""
+        )
+
+    if not items:
+        return ""
+    return f"""
+      <section class="assets">
+        <h2>Assets</h2>
+        <div class="asset-list">{''.join(items)}
+        </div>
+      </section>"""
+
+
+def _share_asset_href(asset: dict[str, Any]) -> str:
+    data_url = str(asset.get("data_url") or "")
+    if data_url.startswith(("data:application/pdf", "data:image/", "data:video/", "data:text/", "data:application/vnd.")):
+        return data_url
+    url = str(asset.get("url") or "")
+    if _is_external_share_url(url):
+        return url
+    return ""
+
+
+def _is_external_share_url(url: str) -> bool:
+    return url.startswith(("https://", "http://"))
+
+
+def _url_host(url: str) -> str:
+    try:
+        from urllib.parse import urlparse
+
+        return urlparse(url).netloc or "external link"
+    except Exception:
+        return "external link"
+
+
+def _format_bytes(size: int) -> str:
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{round(size / 1024)} KB"
+    return f"{size / 1024 / 1024:.1f} MB"
 
 
 def _worker_env_dir() -> Path:

@@ -1,0 +1,1404 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>dAgent Detail</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --line: #e5e7eb;
+      --text: #202124;
+      --muted: #667085;
+      --ink: #111827;
+      --accent: #1a73e8;
+      --accent-soft: #e8f0fe;
+      --danger: #b42318;
+      --ok: #188038;
+      --shadow: 0 1px 2px rgba(60, 64, 67, .14), 0 12px 32px rgba(60, 64, 67, .08);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+      letter-spacing: 0;
+    }
+
+    button {
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 0 14px;
+      background: var(--panel);
+      color: var(--ink);
+      cursor: pointer;
+      transition: background .16s ease, box-shadow .16s ease, border-color .16s ease;
+    }
+
+    button:hover {
+      background: #f1f5fb;
+      box-shadow: 0 1px 3px rgba(60, 64, 67, .14);
+    }
+
+    button.primary {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+    }
+
+    button.danger {
+      color: var(--danger);
+      border-color: #f1b8b3;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: white;
+      color: var(--text);
+      min-height: 38px;
+      padding: 8px 12px;
+    }
+
+    pre {
+      margin: 0;
+      padding: 14px;
+      border-radius: 12px;
+      background: #111827;
+      color: #e5e7eb;
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow: auto;
+      line-height: 1.45;
+      font-size: 12px;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      padding: 12px 18px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(246, 247, 249, .92);
+      backdrop-filter: blur(14px);
+    }
+
+    .titleBlock {
+      min-width: 0;
+    }
+
+    .titleBlock strong,
+    .titleBlock span {
+      display: block;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .titleBlock strong {
+      color: var(--ink);
+      font-size: 16px;
+    }
+
+    .titleBlock span,
+    .muted {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .topActions,
+    .toolbar,
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(240px, 310px);
+      gap: 24px;
+      max-width: 1220px;
+      margin: 0 auto;
+      padding: 24px;
+      align-items: start;
+    }
+
+    .surface {
+      min-width: 0;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      padding: 24px;
+    }
+
+    .composer {
+      min-height: calc(100vh - 130px);
+    }
+
+    .ideaTitle {
+      border: 0;
+      border-radius: 0;
+      min-height: 58px;
+      padding: 0 0 14px;
+      outline: none;
+      background: transparent;
+      color: var(--ink);
+      font-size: 34px;
+      font-weight: 780;
+      line-height: 1.12;
+    }
+
+    .toolbar {
+      position: sticky;
+      top: 61px;
+      z-index: 3;
+      padding: 10px 0;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, .94);
+      backdrop-filter: blur(12px);
+    }
+
+    .tool {
+      display: inline-grid;
+      place-items: center;
+      width: 34px;
+      min-width: 34px;
+      min-height: 34px;
+      padding: 0;
+      font-weight: 740;
+    }
+
+    .wideTool {
+      min-width: 52px;
+    }
+
+    .divider {
+      width: 1px;
+      height: 24px;
+      background: var(--line);
+    }
+
+    .editor {
+      min-height: 58vh;
+      padding: 22px 0 32px;
+      outline: none;
+      color: var(--text);
+      font-size: 16px;
+      line-height: 1.72;
+      overflow-wrap: anywhere;
+    }
+
+    .editor:focus {
+      box-shadow: inset 0 2px 0 var(--accent);
+    }
+
+    .editor h1,
+    .editor h2,
+    .editor h3 {
+      color: var(--ink);
+      line-height: 1.22;
+      margin: 24px 0 10px;
+    }
+
+    .editor p,
+    .editor ul,
+    .editor ol,
+    .editor blockquote,
+    .editor pre {
+      margin: 0 0 14px;
+    }
+
+    .editor blockquote {
+      border-left: 3px solid var(--accent);
+      color: var(--muted);
+      padding-left: 14px;
+    }
+
+    .editor img,
+    .editor video,
+    .editor iframe {
+      display: block;
+      width: min(100%, 760px);
+      max-height: 440px;
+      object-fit: contain;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #f8fafc;
+      margin: 12px 0 16px;
+    }
+
+    .editor iframe {
+      aspect-ratio: 16 / 9;
+      height: auto;
+    }
+
+    .editor table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 16px;
+      font-size: 14px;
+    }
+
+    .editor th,
+    .editor td {
+      border: 1px solid var(--line);
+      padding: 8px;
+      text-align: left;
+    }
+
+    .side {
+      display: grid;
+      gap: 16px;
+      position: sticky;
+      top: 84px;
+    }
+
+    .panel {
+      display: grid;
+      gap: 10px;
+      min-width: 0;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 14px;
+      box-shadow: 0 1px 2px rgba(60, 64, 67, .08);
+    }
+
+    .panel h2 {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+
+    .segmented {
+      display: inline-flex;
+      gap: 2px;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #f8fafc;
+      width: max-content;
+    }
+
+    .segmented button {
+      min-height: 30px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      box-shadow: none;
+    }
+
+    .segmented button.active {
+      background: white;
+      color: var(--ink);
+      box-shadow: 0 1px 3px rgba(60, 64, 67, .14);
+    }
+
+    .drop {
+      border: 1px dashed #cbd5e1;
+      border-radius: 12px;
+      background: #fbfcff;
+      color: var(--muted);
+      padding: 14px;
+      line-height: 1.4;
+    }
+
+    .drop.dragging {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+      color: var(--ink);
+    }
+
+    .assetList {
+      display: grid;
+      gap: 8px;
+    }
+
+    .asset {
+      display: grid;
+      grid-template-columns: 30px minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .asset:last-child {
+      border-bottom: 0;
+    }
+
+    .assetKind {
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      background: #eef4ff;
+      color: var(--accent);
+      font-size: 10px;
+      font-weight: 780;
+      text-transform: uppercase;
+    }
+
+    .assetName {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--ink);
+      font-weight: 650;
+    }
+
+    .assetMeta {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .assetActions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .assetActions button {
+      min-height: 28px;
+      padding: 0 9px;
+      font-size: 12px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .field {
+      min-width: 0;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 8px;
+    }
+
+    .field span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 4px;
+    }
+
+    .field b {
+      display: block;
+      color: var(--ink);
+      overflow-wrap: anywhere;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 0 7px;
+      border-radius: 999px;
+      background: #f1f3f4;
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .succeeded { background: #e6f4ea; color: var(--ok); }
+    .failed { background: #fce8e6; color: var(--danger); }
+    .running, .queued { background: #e8f0fe; color: var(--accent); }
+
+    .empty,
+    .error {
+      padding: 16px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    .error {
+      color: var(--danger);
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 18px;
+      transform: translateX(-50%);
+      max-width: min(520px, calc(100vw - 24px));
+      background: var(--ink);
+      color: white;
+      border-radius: 8px;
+      padding: 10px 12px;
+      box-shadow: var(--shadow);
+      display: none;
+      z-index: 20;
+    }
+
+    .toast.show {
+      display: block;
+    }
+
+    @media (max-width: 850px) {
+      .topbar,
+      .shell {
+        grid-template-columns: 1fr;
+      }
+
+      .topActions {
+        justify-content: flex-start;
+      }
+
+      .shell {
+        padding: 12px;
+      }
+
+      .surface {
+        padding: 16px;
+      }
+
+      .side,
+      .toolbar {
+        position: static;
+      }
+    }
+
+    @media (max-width: 430px) {
+      body {
+        font-size: 13px;
+      }
+
+      .ideaTitle {
+        font-size: 25px;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .topActions,
+      .row {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .topActions button,
+      .row button {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <button id="back">Dashboard</button>
+    <div class="titleBlock">
+      <strong id="screenTitle">dAgent detail</strong>
+      <span id="screenMeta">Loading</span>
+    </div>
+    <div class="topActions" id="topActions"></div>
+  </header>
+
+  <main id="app">
+    <div class="empty">Loading detail view.</div>
+  </main>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const state = {
+      token: "",
+      worker: "",
+      jobId: "",
+      job: null,
+      doc: null,
+      saveTimer: null
+    };
+
+    const byId = (id) => document.getElementById(id);
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    function paramsFromHash() {
+      const raw = location.hash.startsWith("#") ? location.hash.slice(1) : "";
+      return new URLSearchParams(raw);
+    }
+
+    async function api(path, options = {}) {
+      if (!state.token) throw new Error("missing token");
+      const headers = Object.assign({}, options.headers || {}, {
+        Authorization: `Bearer ${state.token}`
+      });
+      let body = options.body;
+      if (body && typeof body !== "string") {
+        body = JSON.stringify(body);
+        headers["Content-Type"] = "application/json";
+      }
+      const response = await fetch(path, Object.assign({}, options, {headers, body}));
+      if (!response.ok) {
+        const text = await response.text();
+        let message = text || `${response.status} ${response.statusText}`;
+        try {
+          const parsed = JSON.parse(text);
+          message = parsed.detail || message;
+        } catch (_) {}
+        throw new Error(message);
+      }
+      if (options.text) return response.text();
+      return response.json();
+    }
+
+    function workerPath(suffix = "") {
+      return `/v1/dashboard/workers/${encodeURIComponent(state.worker)}/jobs/${encodeURIComponent(state.jobId)}${suffix}`;
+    }
+
+    function toast(message) {
+      const node = byId("toast");
+      node.textContent = message;
+      node.classList.add("show");
+      window.clearTimeout(node._timer);
+      node._timer = window.setTimeout(() => node.classList.remove("show"), 3000);
+    }
+
+    function formatTime(value) {
+      if (!value) return "-";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleString([], {month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit"});
+    }
+
+    async function init() {
+      const params = paramsFromHash();
+      state.token = params.get("token") || localStorage.getItem("dagentDashboardToken") || "";
+      state.worker = params.get("worker") || "";
+      state.jobId = params.get("job") || "";
+      if (!state.token || !state.worker || !state.jobId) {
+        byId("app").innerHTML = '<div class="error">Missing token, worker, or job id.</div>';
+        return;
+      }
+      localStorage.setItem("dagentDashboardToken", state.token);
+      byId("back").addEventListener("click", () => {
+        location.assign(`/ui#token=${encodeURIComponent(state.token)}`);
+      });
+      await load();
+    }
+
+    async function load() {
+      try {
+        state.job = await api(workerPath(""));
+        byId("screenTitle").textContent = state.job.task_preview || state.job.intent;
+        byId("screenMeta").textContent = `${state.worker} / ${state.job.intent} / ${state.job.status} / ${formatTime(state.job.created_at)}`;
+        renderIntentDetail();
+      } catch (error) {
+        byId("app").innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    function renderIntentDetail() {
+      if (state.job.intent === "capture_idea") {
+        renderCaptureIdea();
+      } else {
+        renderGenericJob();
+      }
+    }
+
+    async function renderCaptureIdea() {
+      byId("app").innerHTML = '<div class="empty">Opening editor.</div>';
+      try {
+        state.doc = prepareDoc(await api(workerPath("/idea-document")));
+        byId("screenTitle").textContent = state.doc.title || "Capture idea";
+        byId("screenMeta").textContent = `${state.worker} / ${state.doc.visibility} / ${formatTime(state.doc.updated_at)}`;
+        byId("topActions").innerHTML = `
+          <button id="copyPrivate">Private link</button>
+          <button id="publicShare" class="primary">Public link</button>
+        `;
+        byId("app").innerHTML = `
+          <div class="shell">
+            <section class="surface composer">
+              <input id="docTitle" class="ideaTitle" value="${escapeHtml(state.doc.title || "")}" placeholder="Untitled idea">
+              <div class="toolbar">
+                <button class="tool wideTool" data-cmd="formatBlock" data-value="H2" title="Heading">H2</button>
+                <button class="tool" data-cmd="bold" title="Bold">B</button>
+                <button class="tool" data-cmd="italic" title="Italic">I</button>
+                <button class="tool" data-cmd="underline" title="Underline">U</button>
+                <span class="divider"></span>
+                <button class="tool wideTool" data-cmd="insertUnorderedList" title="List">ul</button>
+                <button class="tool wideTool" data-cmd="insertOrderedList" title="Numbered list">ol</button>
+                <button class="tool wideTool" data-action="quote" title="Quote">qt</button>
+                <button class="tool wideTool" data-action="code" title="Code">{}</button>
+                <span class="divider"></span>
+                <button class="tool wideTool" data-action="link" title="Link">ln</button>
+                <button class="tool wideTool" data-action="image" title="Image">im</button>
+                <button class="tool wideTool" data-action="video" title="Video">vi</button>
+              </div>
+              <div id="editor" class="editor" contenteditable="true" spellcheck="true">${sanitizeHtml(state.doc.content_html || "<p></p>")}</div>
+              <div class="row">
+                <span class="muted" id="saveState">Saved</span>
+              </div>
+            </section>
+
+            <aside class="side">
+              <section class="panel">
+                <h2>Visibility</h2>
+                <div class="segmented" id="visibility">
+                  <button data-visibility="private" class="${state.doc.visibility !== "public" ? "active" : ""}">Private</button>
+                  <button data-visibility="public" class="${state.doc.visibility === "public" ? "active" : ""}">Public</button>
+                </div>
+              </section>
+              <section class="panel">
+                <h2>Capture</h2>
+                <div class="grid">
+                  ${captureFieldHtml("Type", state.doc.capture && state.doc.capture.label)}
+                  ${captureFieldHtml("Source", state.doc.capture && state.doc.capture.source)}
+                  ${captureFieldHtml("Input", state.doc.capture && state.doc.capture.input_type)}
+                  ${captureFieldHtml("Created", formatTime(state.doc.capture && state.doc.capture.created_at))}
+                </div>
+                <div class="field"><span>Job</span><b>${escapeHtml(state.doc.capture && state.doc.capture.job_id || state.jobId)}</b></div>
+              </section>
+              <section class="panel">
+                <h2>Add</h2>
+                <div class="row">
+                  <button id="addLink">Link</button>
+                  <button id="addImage">Image</button>
+                  <button id="addVideo">Video</button>
+                  <button id="addFile">File</button>
+                  <button id="addMarkdown">Markdown</button>
+                  <button id="addCode">Code</button>
+                  <button id="addTable">Table</button>
+                  <button id="pickFiles">Upload</button>
+                </div>
+                <input id="fileInput" type="file" multiple hidden>
+                <div class="drop" id="drop">Drop images, videos, PDFs, sheets, or notes here.</div>
+              </section>
+              <section class="panel">
+                <h2>Assets</h2>
+                <div class="assetList" id="assetList">${assetListHtml()}</div>
+              </section>
+              <section class="panel">
+                <h2>Export</h2>
+                <div class="row">
+                  <button data-export="pdf">PDF</button>
+                  <button data-export="doc">DOC</button>
+                  <button data-export="md">Markdown</button>
+                  <button data-export="html">HTML</button>
+                  <button id="copyText">Copy text</button>
+                </div>
+              </section>
+            </aside>
+          </div>
+        `;
+        bindCaptureIdea();
+      } catch (error) {
+        byId("app").innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    function prepareDoc(document) {
+      const doc = Object.assign({title: "", visibility: "private", content_html: "<p></p>", assets: []}, document || {});
+      doc.content_html = compactInlineAssetLinks(stripGeneratedCaptureScaffold(doc.content_html || "<p></p>"));
+      doc.assets = Array.isArray(doc.assets) ? doc.assets.map(ensureAsset).filter(Boolean) : [];
+      return doc;
+    }
+
+    function captureFieldHtml(label, value) {
+      return `<div class="field"><span>${escapeHtml(label)}</span><b>${escapeHtml(value || "-")}</b></div>`;
+    }
+
+    function stripGeneratedCaptureScaffold(markup) {
+      const template = document.createElement("template");
+      template.innerHTML = sanitizeHtml(markup || "");
+      const firstHeading = template.content.querySelector("h1");
+      const taskHeading = Array.from(template.content.querySelectorAll("h2"))
+        .find((heading) => heading.textContent.trim().toLowerCase() === "task");
+      if (!firstHeading || firstHeading.textContent.trim().toLowerCase() !== "capture idea" || !taskHeading) {
+        return sanitizeHtml(markup || "");
+      }
+
+      const extracted = [];
+      let node = taskHeading.nextSibling;
+      while (node) {
+        if (node.nodeType === Node.ELEMENT_NODE && node.tagName === "H2") break;
+        extracted.push(node.cloneNode(true));
+        node = node.nextSibling;
+      }
+      const holder = document.createElement("div");
+      extracted.forEach((item) => holder.appendChild(item));
+      const cleaned = holder.innerHTML.trim();
+      return cleaned ? sanitizeHtml(cleaned) : "<p></p>";
+    }
+
+    function bindCaptureIdea() {
+      byId("docTitle").addEventListener("input", () => {
+        byId("screenTitle").textContent = byId("docTitle").value || "Capture idea";
+        scheduleSave();
+      });
+      byId("editor").addEventListener("input", scheduleSave);
+      byId("editor").addEventListener("paste", pasteClean);
+      document.querySelectorAll(".toolbar button").forEach((button) => {
+        button.addEventListener("click", () => handleTool(button));
+      });
+      byId("visibility").addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-visibility]");
+        if (!button) return;
+        state.doc.visibility = button.dataset.visibility === "public" ? "public" : "private";
+        byId("visibility").querySelectorAll("button").forEach((item) => {
+          item.classList.toggle("active", item.dataset.visibility === state.doc.visibility);
+        });
+        scheduleSave();
+      });
+      byId("addLink").addEventListener("click", addLink);
+      byId("addImage").addEventListener("click", () => addMediaUrl("image"));
+      byId("addVideo").addEventListener("click", () => addMediaUrl("video"));
+      byId("addFile").addEventListener("click", addFileUrl);
+      byId("addMarkdown").addEventListener("click", addMarkdown);
+      byId("addCode").addEventListener("click", addCode);
+      byId("addTable").addEventListener("click", () => insertHtml("<table><tbody><tr><th>Column</th><th>Value</th></tr><tr><td>Item</td><td>Detail</td></tr></tbody></table>"));
+      byId("pickFiles").addEventListener("click", () => byId("fileInput").click());
+      byId("fileInput").addEventListener("change", (event) => handleFiles(event.target.files));
+      byId("copyPrivate").addEventListener("click", copyPrivateLink);
+      byId("publicShare").addEventListener("click", sharePublicHtml);
+      byId("copyText").addEventListener("click", copyDocText);
+      document.querySelectorAll("[data-export]").forEach((button) => {
+        button.addEventListener("click", () => exportDoc(button.dataset.export));
+      });
+      bindAssets();
+      const drop = byId("drop");
+      drop.addEventListener("dragover", (event) => {
+        event.preventDefault();
+        drop.classList.add("dragging");
+      });
+      drop.addEventListener("dragleave", () => drop.classList.remove("dragging"));
+      drop.addEventListener("drop", (event) => {
+        event.preventDefault();
+        drop.classList.remove("dragging");
+        handleFiles(event.dataTransfer.files);
+      });
+    }
+
+    function handleTool(button) {
+      const command = button.dataset.cmd;
+      const action = button.dataset.action;
+      if (command) {
+        const value = command === "formatBlock" ? `<${button.dataset.value.toLowerCase()}>` : null;
+        byId("editor").focus();
+        document.execCommand(command, false, value);
+        scheduleSave();
+        return;
+      }
+      if (action === "quote") insertHtml("<blockquote>Quote</blockquote>");
+      if (action === "code") addCode();
+      if (action === "link") addLink();
+      if (action === "image") addMediaUrl("image");
+      if (action === "video") addMediaUrl("video");
+    }
+
+    function pasteClean(event) {
+      const html = event.clipboardData.getData("text/html");
+      const text = event.clipboardData.getData("text/plain");
+      if (!html && !text) return;
+      event.preventDefault();
+      insertHtml(html ? sanitizeHtml(html) : markdownToHtml(text));
+    }
+
+    function insertHtml(markup) {
+      byId("editor").focus();
+      document.execCommand("insertHTML", false, sanitizeHtml(markup));
+      scheduleSave();
+    }
+
+    function scheduleSave() {
+      const saveState = byId("saveState");
+      if (saveState) saveState.textContent = "Saving...";
+      window.clearTimeout(state.saveTimer);
+      state.saveTimer = window.setTimeout(saveDoc, 650);
+    }
+
+    async function saveDoc() {
+      if (!state.doc) return null;
+      const body = collectDoc();
+      try {
+        const saved = await api(workerPath("/idea-document"), {method: "PUT", body});
+        state.doc = prepareDoc(saved);
+        byId("screenMeta").textContent = `${state.worker} / ${state.doc.visibility} / ${formatTime(state.doc.updated_at)}`;
+        const saveState = byId("saveState");
+        if (saveState) saveState.textContent = `Saved ${new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}`;
+        return saved;
+      } catch (error) {
+        const saveState = byId("saveState");
+        if (saveState) saveState.textContent = `Save failed: ${shortError(error.message)}`;
+        toast(error.message);
+        return null;
+      }
+    }
+
+    function collectDoc() {
+      const editorHtml = byId("editor") ? byId("editor").innerHTML : state.doc.content_html;
+      return Object.assign({}, state.doc, {
+        title: byId("docTitle") ? byId("docTitle").value.trim() : state.doc.title,
+        visibility: state.doc.visibility === "public" ? "public" : "private",
+        content_html: sanitizeHtml(compactInlineAssetLinks(editorHtml)),
+        assets: state.doc.assets || []
+      });
+    }
+
+    function addLink() {
+      const url = window.prompt("Link URL");
+      if (!url) return;
+      const label = window.prompt("Title", url) || url;
+      insertHtml(`<p><a href="${escapeHtml(url)}">${escapeHtml(label)}</a></p>`);
+      addAsset({kind: "link", name: label, url});
+    }
+
+    function addMediaUrl(kind) {
+      const url = window.prompt(kind === "image" ? "Image URL" : "Video URL");
+      if (!url) return;
+      const name = window.prompt("Title", url.split("/").pop() || kind) || kind;
+      const asset = addAsset({kind, name, url});
+      insertAsset(asset);
+    }
+
+    function addFileUrl() {
+      const url = window.prompt("File, PDF, or sheet URL");
+      if (!url) return;
+      const name = window.prompt("File title", url.split("/").pop() || "File") || "File";
+      const asset = addAsset({kind: inferAssetKind("", name || url), name, url});
+      insertAsset(asset);
+    }
+
+    function addMarkdown() {
+      const markdown = window.prompt("Paste Markdown");
+      if (markdown) insertHtml(markdownToHtml(markdown));
+    }
+
+    function addCode() {
+      const language = window.prompt("Language", "text") || "text";
+      const code = window.prompt("Code");
+      if (code) insertHtml(`<pre><code data-language="${escapeHtml(language)}">${escapeHtml(code)}</code></pre>`);
+    }
+
+    function addAsset(asset) {
+      const prepared = ensureAsset(Object.assign({}, asset));
+      state.doc.assets.push(prepared);
+      refreshAssets();
+      scheduleSave();
+      return prepared;
+    }
+
+    function ensureAsset(asset) {
+      if (!asset || typeof asset !== "object") return null;
+      asset.id = asset.id || `asset-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      asset.kind = asset.kind || inferAssetKind(asset.mime_type || "", asset.name || asset.url || "");
+      return asset;
+    }
+
+    async function handleFiles(fileList) {
+      const files = Array.from(fileList || []);
+      for (const file of files) {
+        const asset = await fileToAsset(file);
+        addAsset(asset);
+        if (asset.data_url && ["image", "video", "markdown"].includes(asset.kind)) {
+          insertAsset(asset);
+        }
+      }
+      if (files.length) toast(`${files.length} asset${files.length === 1 ? "" : "s"} added.`);
+    }
+
+    function fileToAsset(file) {
+      const inlineLimit = 1600000;
+      const asset = {
+        kind: inferAssetKind(file.type, file.name),
+        name: file.name,
+        mime_type: file.type || "",
+        size: file.size
+      };
+      if (file.size > inlineLimit) {
+        asset.note = "Large local file reference. Add a URL before sharing.";
+        return Promise.resolve(asset);
+      }
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          asset.data_url = String(reader.result || "");
+          resolve(asset);
+        };
+        reader.onerror = () => resolve(asset);
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function insertAsset(asset) {
+      const source = asset.url || asset.data_url || "";
+      if (!source) {
+        toast("This asset needs a URL before inserting.");
+        return;
+      }
+      const name = asset.name || source;
+      if (asset.kind === "image") {
+        insertHtml(`<p><img src="${escapeHtml(source)}" alt="${escapeHtml(name)}"></p>`);
+      } else if (asset.kind === "video") {
+        const embed = videoEmbedUrl(source);
+        insertHtml(embed ? `<iframe src="${escapeHtml(embed)}" title="${escapeHtml(name)}" allowfullscreen></iframe>` : `<video src="${escapeHtml(source)}" controls></video>`);
+      } else if (asset.kind === "markdown" && asset.data_url) {
+        fetch(asset.data_url).then((response) => response.text()).then((text) => insertHtml(markdownToHtml(text)));
+      } else if (asset.data_url && ["pdf", "sheet", "file"].includes(asset.kind)) {
+        insertHtml(`<p><strong>Attachment:</strong> ${escapeHtml(name)}</p>`);
+      } else {
+        insertHtml(`<p><a href="${escapeHtml(source)}">${escapeHtml(name)}</a></p>`);
+      }
+    }
+
+    function assetListHtml() {
+      const assets = state.doc && state.doc.assets ? state.doc.assets : [];
+      if (!assets.length) return '<div class="empty">No assets yet.</div>';
+      return assets.map((asset) => `
+        <div class="asset" data-id="${escapeHtml(asset.id)}">
+          <span class="assetKind">${escapeHtml((asset.kind || "file").slice(0, 4))}</span>
+          <div>
+            <div class="assetName">${escapeHtml(asset.name || asset.url || "Untitled asset")}</div>
+            <span class="assetMeta">${escapeHtml(assetMeta(asset))}</span>
+          </div>
+          <div class="assetActions">
+            <button data-action="insert">Insert</button>
+            <button data-action="open">Open</button>
+            <button data-action="remove">Remove</button>
+          </div>
+        </div>
+      `).join("");
+    }
+
+    function bindAssets() {
+      byId("assetList").addEventListener("click", async (event) => {
+        const button = event.target.closest("button[data-action]");
+        const item = event.target.closest("[data-id]");
+        if (!button || !item) return;
+        const asset = state.doc.assets.find((candidate) => candidate.id === item.dataset.id);
+        if (!asset) return;
+        if (button.dataset.action === "insert") insertAsset(asset);
+        if (button.dataset.action === "open") openAsset(asset);
+        if (button.dataset.action === "remove") {
+          state.doc.assets = state.doc.assets.filter((candidate) => candidate.id !== asset.id);
+          refreshAssets();
+          await saveDoc();
+        }
+      });
+    }
+
+    function refreshAssets() {
+      const list = byId("assetList");
+      if (list) list.innerHTML = assetListHtml();
+    }
+
+    function openAsset(asset) {
+      const source = asset.url || asset.data_url;
+      if (!source) {
+        toast("This asset is a local reference only.");
+        return;
+      }
+      window.open(source, "_blank", "noopener,noreferrer");
+    }
+
+    function assetMeta(asset) {
+      const parts = [asset.kind || "file"];
+      if (asset.mime_type) parts.push(asset.mime_type);
+      if (asset.size) parts.push(formatBytes(asset.size));
+      if (asset.url) parts.push(asset.url);
+      if (asset.note) parts.push(asset.note);
+      return parts.join(" / ");
+    }
+
+    function inferAssetKind(mimeType, name) {
+      const mime = String(mimeType || "").toLowerCase();
+      const lower = String(name || "").toLowerCase();
+      if (mime.startsWith("image/") || /\.(png|jpe?g|gif|webp|avif|svg)$/.test(lower)) return "image";
+      if (mime.startsWith("video/") || /\.(mp4|mov|webm|m4v)$/.test(lower)) return "video";
+      if (mime === "application/pdf" || /\.pdf$/.test(lower)) return "pdf";
+      if (mime.includes("spreadsheet") || /\.(xls|xlsx|csv|numbers)$/.test(lower)) return "sheet";
+      if (/\.(md|markdown)$/.test(lower)) return "markdown";
+      return "file";
+    }
+
+    function videoEmbedUrl(rawUrl) {
+      try {
+        const url = new URL(rawUrl, location.href);
+        if (url.hostname.includes("youtube.com") && url.searchParams.get("v")) return `https://www.youtube.com/embed/${encodeURIComponent(url.searchParams.get("v"))}`;
+        if (url.hostname === "youtu.be") return `https://www.youtube.com/embed/${encodeURIComponent(url.pathname.slice(1))}`;
+        if (url.hostname.includes("vimeo.com")) {
+          const id = url.pathname.split("/").filter(Boolean).pop();
+          if (id) return `https://player.vimeo.com/video/${encodeURIComponent(id)}`;
+        }
+      } catch (_) {
+        return "";
+      }
+      return "";
+    }
+
+    function formatBytes(bytes) {
+      if (!bytes) return "";
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+      return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    }
+
+    function shortError(message) {
+      const text = String(message || "unknown");
+      return text.length > 80 ? `${text.slice(0, 77)}...` : text;
+    }
+
+    async function copyPrivateLink() {
+      await copyShareLink("private");
+      toast("Private link copied.");
+    }
+
+    async function sharePublicHtml() {
+      state.doc.visibility = "public";
+      await saveDoc();
+      await copyShareLink("public");
+      toast("Public link copied.");
+    }
+
+    async function copyShareLink(visibility) {
+      await saveDoc();
+      const share = await api(workerPath("/shares"), {
+        method: "POST",
+        body: {visibility}
+      });
+      if (!share || !share.url_path) throw new Error("share link was not created");
+      await copyText(`${location.origin}${share.url_path}`);
+    }
+
+    async function copyDocText() {
+      const doc = collectDoc();
+      await copyText(`${doc.title || "Untitled idea"}\n\n${plainTextFromHtml(doc.content_html)}`);
+      toast("Text copied.");
+    }
+
+    async function exportDoc(format, suffix = "") {
+      await saveDoc();
+      const doc = collectDoc();
+      const title = slugify(doc.title || "idea") + suffix;
+      const page = htmlDocument(doc);
+      if (format === "pdf") {
+        const win = window.open("", "_blank", "noopener,noreferrer");
+        if (!win) {
+          toast("Allow popups to print PDF.");
+          return;
+        }
+        win.document.write(page);
+        win.document.close();
+        win.focus();
+        win.print();
+        return;
+      }
+      if (format === "doc") downloadBlob(`${title}.doc`, page, "application/msword");
+      else if (format === "md") downloadBlob(`${title}.md`, htmlToMarkdown(doc.content_html, doc.title), "text/markdown");
+      else downloadBlob(`${title}.html`, page, "text/html");
+    }
+
+    function htmlDocument(doc) {
+      return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(doc.title || "Idea")}</title><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.65;max-width:760px;margin:48px auto;padding:0 20px;color:#202124}img,video,iframe{max-width:100%;border:1px solid #e5e7eb;border-radius:12px}pre{background:#111827;color:#e5e7eb;padding:14px;border-radius:10px;overflow:auto}a{color:#1a73e8}</style></head><body><h1>${escapeHtml(doc.title || "Untitled idea")}</h1>${sanitizeHtml(doc.content_html || "")}</body></html>`;
+    }
+
+    function downloadBlob(filename, content, type) {
+      const blob = new Blob([content], {type});
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      window.setTimeout(() => {
+        URL.revokeObjectURL(link.href);
+        link.remove();
+      }, 0);
+    }
+
+    async function copyText(value) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(value);
+        return;
+      }
+      const input = document.createElement("textarea");
+      input.value = value;
+      input.style.position = "fixed";
+      input.style.left = "-9999px";
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand("copy");
+      input.remove();
+    }
+
+    function compactInlineAssetLinks(markup) {
+      const template = document.createElement("template");
+      template.innerHTML = String(markup || "");
+      template.content.querySelectorAll("a[href^='data:']").forEach((link) => {
+        if (!isInlineAttachmentDataUrl(link.getAttribute("href") || "")) return;
+        const label = document.createElement("span");
+        label.textContent = link.textContent || "Attachment";
+        link.replaceWith(label);
+      });
+      return template.innerHTML;
+    }
+
+    function isInlineAttachmentDataUrl(value) {
+      return /^data:(application\/pdf|application\/vnd\.|application\/msword|application\/octet-stream|text\/csv|text\/plain|text\/markdown)/i.test(String(value || ""));
+    }
+
+    function sanitizeHtml(markup) {
+      const template = document.createElement("template");
+      template.innerHTML = String(markup || "");
+      const allowed = new Set(["A", "B", "BLOCKQUOTE", "BR", "CODE", "DIV", "EM", "H1", "H2", "H3", "H4", "HR", "I", "IFRAME", "IMG", "LI", "OL", "P", "PRE", "S", "SOURCE", "SPAN", "STRONG", "TABLE", "TBODY", "TD", "TH", "THEAD", "TR", "U", "UL", "VIDEO"]);
+      const allowedAttrs = {
+        A: ["href", "target", "rel"],
+        IMG: ["src", "alt"],
+        VIDEO: ["src", "controls", "poster"],
+        SOURCE: ["src", "type"],
+        IFRAME: ["src", "title", "allow", "allowfullscreen"],
+        CODE: ["data-language"]
+      };
+      function clean(node) {
+        Array.from(node.childNodes).forEach(clean);
+        if (node.nodeType !== Node.ELEMENT_NODE) return;
+        if (!allowed.has(node.tagName)) {
+          node.replaceWith(...Array.from(node.childNodes));
+          return;
+        }
+        Array.from(node.attributes).forEach((attribute) => {
+          const name = attribute.name.toLowerCase();
+          if (name.startsWith("on") || !(allowedAttrs[node.tagName] || []).includes(name)) {
+            node.removeAttribute(attribute.name);
+            return;
+          }
+          if (["href", "src", "poster"].includes(name) && !isSafeUrl(attribute.value, node.tagName, name)) {
+            node.removeAttribute(attribute.name);
+          }
+        });
+        if (node.tagName === "A") {
+          node.setAttribute("target", "_blank");
+          node.setAttribute("rel", "noopener noreferrer");
+        }
+        if (node.tagName === "VIDEO") node.setAttribute("controls", "");
+      }
+      clean(template.content);
+      return template.innerHTML;
+    }
+
+    function isSafeUrl(value, tag, attr) {
+      const raw = String(value || "").trim();
+      if (!raw) return false;
+      if (raw.startsWith("#")) return attr === "href";
+      if (raw.startsWith("data:")) {
+        if (tag === "IMG") return raw.startsWith("data:image/");
+        if (tag === "VIDEO" || tag === "SOURCE") return raw.startsWith("data:video/");
+        if (tag === "A") return false;
+        return false;
+      }
+      try {
+        const url = new URL(raw, location.href);
+        if (!["http:", "https:", "mailto:", "tel:"].includes(url.protocol)) return false;
+        if (tag === "IFRAME") return url.hostname.includes("youtube.com") || url.hostname.includes("youtu.be") || url.hostname.includes("vimeo.com");
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function markdownToHtml(markdown) {
+      const lines = String(markdown || "").split(/\r?\n/);
+      const html = [];
+      let inCode = false;
+      let code = [];
+      let inList = false;
+      const closeList = () => {
+        if (inList) {
+          html.push("</ul>");
+          inList = false;
+        }
+      };
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith("```")) {
+          closeList();
+          if (inCode) {
+            html.push(`<pre><code>${escapeHtml(code.join("\n"))}</code></pre>`);
+            code = [];
+            inCode = false;
+          } else {
+            inCode = true;
+          }
+          continue;
+        }
+        if (inCode) {
+          code.push(line);
+          continue;
+        }
+        if (!trimmed) {
+          closeList();
+        } else if (trimmed.startsWith("### ")) {
+          closeList();
+          html.push(`<h3>${inlineMarkdown(trimmed.slice(4))}</h3>`);
+        } else if (trimmed.startsWith("## ")) {
+          closeList();
+          html.push(`<h2>${inlineMarkdown(trimmed.slice(3))}</h2>`);
+        } else if (trimmed.startsWith("# ")) {
+          closeList();
+          html.push(`<h1>${inlineMarkdown(trimmed.slice(2))}</h1>`);
+        } else if (trimmed.startsWith("- ")) {
+          if (!inList) {
+            html.push("<ul>");
+            inList = true;
+          }
+          html.push(`<li>${inlineMarkdown(trimmed.slice(2))}</li>`);
+        } else if (trimmed.startsWith("> ")) {
+          closeList();
+          html.push(`<blockquote>${inlineMarkdown(trimmed.slice(2))}</blockquote>`);
+        } else {
+          closeList();
+          html.push(`<p>${inlineMarkdown(trimmed)}</p>`);
+        }
+      }
+      closeList();
+      if (inCode) html.push(`<pre><code>${escapeHtml(code.join("\n"))}</code></pre>`);
+      return sanitizeHtml(html.join("\n"));
+    }
+
+    function inlineMarkdown(text) {
+      let value = escapeHtml(text);
+      value = value.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>');
+      value = value.replace(/`([^`]+)`/g, "<code>$1</code>");
+      value = value.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+      value = value.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+      return value;
+    }
+
+    function htmlToMarkdown(markup, title = "") {
+      const template = document.createElement("template");
+      template.innerHTML = sanitizeHtml(markup);
+      function walk(node) {
+        if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+        if (node.nodeType !== Node.ELEMENT_NODE) return Array.from(node.childNodes).map(walk).join("");
+        const content = Array.from(node.childNodes).map(walk).join("").trim();
+        if (node.tagName === "H1") return `# ${content}\n\n`;
+        if (node.tagName === "H2") return `## ${content}\n\n`;
+        if (node.tagName === "H3") return `### ${content}\n\n`;
+        if (node.tagName === "P") return `${content}\n\n`;
+        if (node.tagName === "LI") return `- ${content}\n`;
+        if (node.tagName === "UL" || node.tagName === "OL") return `${Array.from(node.childNodes).map(walk).join("")}\n`;
+        if (node.tagName === "A") return `[${content}](${node.getAttribute("href") || ""})`;
+        if (node.tagName === "STRONG" || node.tagName === "B") return `**${content}**`;
+        if (node.tagName === "EM" || node.tagName === "I") return `*${content}*`;
+        if (node.tagName === "CODE" && node.parentElement && node.parentElement.tagName !== "PRE") return `\`${content}\``;
+        if (node.tagName === "PRE") return `\`\`\`\n${node.textContent.trim()}\n\`\`\`\n\n`;
+        if (node.tagName === "IMG") return `![${node.getAttribute("alt") || ""}](${node.getAttribute("src") || ""})\n\n`;
+        if (node.tagName === "IFRAME" || node.tagName === "VIDEO") return `${node.getAttribute("src") || ""}\n\n`;
+        if (node.tagName === "BLOCKQUOTE") return `> ${content}\n\n`;
+        return content;
+      }
+      const body = Array.from(template.content.childNodes).map(walk).join("").trim();
+      return `# ${title || "Untitled idea"}\n\n${body}\n`;
+    }
+
+    function plainTextFromHtml(markup) {
+      const template = document.createElement("template");
+      template.innerHTML = sanitizeHtml(markup);
+      return template.content.textContent.trim();
+    }
+
+    function slugify(value) {
+      return String(value || "idea").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || "idea";
+    }
+
+    async function renderGenericJob() {
+      const job = state.job;
+      byId("topActions").innerHTML = `
+        <button id="reload">Refresh</button>
+        <button id="openLog">Logs</button>
+      `;
+      byId("app").innerHTML = `
+        <div class="shell">
+          <section class="surface">
+            <div class="row">
+              <span class="pill ${escapeHtml(job.status)}">${escapeHtml(job.status)}</span>
+              <span class="pill">${escapeHtml(job.intent)}</span>
+              <span class="pill">${escapeHtml(job.worker || state.worker)}</span>
+            </div>
+            <div style="height:14px"></div>
+            <div class="grid">
+              <div class="field"><span>Created</span><b>${escapeHtml(formatTime(job.created_at))}</b></div>
+              <div class="field"><span>Finished</span><b>${escapeHtml(formatTime(job.finished_at))}</b></div>
+              <div class="field"><span>Repo</span><b>${escapeHtml(job.repo || "-")}</b></div>
+              <div class="field"><span>Tool</span><b>${escapeHtml(job.tool || "-")}</b></div>
+            </div>
+            <h2>Output</h2>
+            <pre id="noteBlock">Loading output...</pre>
+          </section>
+          <aside class="side">
+            <section class="panel">
+              <h2>Payload</h2>
+              <pre>${escapeHtml(JSON.stringify(job.payload || {}, null, 2))}</pre>
+            </section>
+            <section class="panel">
+              <h2>Result</h2>
+              <pre>${escapeHtml(JSON.stringify(job.result || {}, null, 2))}</pre>
+            </section>
+          </aside>
+        </div>
+      `;
+      byId("reload").addEventListener("click", load);
+      byId("openLog").addEventListener("click", async () => {
+        const text = await api(workerPath("/log?tail=100000"), {text: true});
+        byId("noteBlock").textContent = text || "No log yet.";
+      });
+      try {
+        byId("noteBlock").textContent = await api(workerPath("/note"), {text: true});
+      } catch (_) {
+        byId("noteBlock").textContent = [
+          job.task_preview || "No task text.",
+          "",
+          `Status: ${job.status}`,
+          job.error ? `Error: ${job.error}` : "",
+          job.result && job.result.note_path ? `Note: ${job.result.note_path}` : ""
+        ].filter(Boolean).join("\n");
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>
