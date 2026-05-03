@@ -54,6 +54,13 @@ class NotificationConfig:
 class WorkerConfig:
     data_dir: Path
     notes_dir: Path
+    trusted_roots: tuple[Path, ...] = ()
+    auto_approve_trusted_projects: bool = False
+    code_worktrees_dir: Path | None = None
+    code_server_url: str = ""
+    code_server_folder_url_template: str = ""
+    code_codex_sandbox: str = "workspace-write"
+    code_codex_approval_policy: str = "never"
     max_parallel_jobs: int = 2
     default_require_approval: bool = True
     auto_run_intents: frozenset[str] = field(default_factory=frozenset)
@@ -119,6 +126,28 @@ def load_config(path: str | os.PathLike[str] | None = None) -> WorkerConfig:
         ntfy_token=os.getenv("NTFY_TOKEN", str(notifications_raw.get("ntfy_token", ""))),
     )
 
+    trusted_roots = tuple(
+        _resolve_path(root, base_dir) for root in _string_list(raw.get("trusted_roots", []), "trusted_roots")
+    )
+    code_raw = raw.get("code", {}) or {}
+    if not isinstance(code_raw, dict):
+        raise ConfigError("code must be a YAML mapping")
+    code_worktrees_dir = _resolve_path(code_raw.get("worktrees_dir", ".data/code-worktrees"), base_dir)
+    code_server_url = str(code_raw.get("code_server_url", raw.get("code_server_url", "")) or "")
+    code_server_folder_url_template = str(
+        code_raw.get("code_server_folder_url_template", raw.get("code_server_folder_url_template", "")) or ""
+    )
+    code_codex_sandbox = str(
+        os.getenv("DAGENT_CODEX_SANDBOX", code_raw.get("codex_sandbox", "workspace-write")) or "workspace-write"
+    )
+    if code_codex_sandbox not in {"read-only", "workspace-write", "danger-full-access"}:
+        raise ConfigError("code.codex_sandbox must be read-only, workspace-write, or danger-full-access")
+    code_codex_approval_policy = str(
+        os.getenv("DAGENT_CODEX_APPROVAL_POLICY", code_raw.get("codex_approval_policy", "never")) or "never"
+    )
+    if code_codex_approval_policy not in {"untrusted", "on-failure", "on-request", "never"}:
+        raise ConfigError("code.codex_approval_policy must be untrusted, on-failure, on-request, or never")
+
     repos = _load_repos(raw.get("repos", {}) or {})
     tools = _load_commands(raw.get("tools", {}) or {})
     scripts = _load_commands(raw.get("scripts", {}) or {})
@@ -126,6 +155,13 @@ def load_config(path: str | os.PathLike[str] | None = None) -> WorkerConfig:
     return WorkerConfig(
         data_dir=data_dir,
         notes_dir=notes_dir,
+        trusted_roots=trusted_roots,
+        auto_approve_trusted_projects=bool(raw.get("auto_approve_trusted_projects", False)),
+        code_worktrees_dir=code_worktrees_dir,
+        code_server_url=code_server_url,
+        code_server_folder_url_template=code_server_folder_url_template,
+        code_codex_sandbox=code_codex_sandbox,
+        code_codex_approval_policy=code_codex_approval_policy,
         max_parallel_jobs=int(raw.get("max_parallel_jobs", 2)),
         default_require_approval=bool(raw.get("default_require_approval", True)),
         auto_run_intents=frozenset(_string_list(raw.get("auto_run_intents", []), "auto_run_intents")),

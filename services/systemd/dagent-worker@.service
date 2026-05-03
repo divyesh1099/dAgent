@@ -9,6 +9,7 @@ Type=simple
 WorkingDirectory={{DAGENT_ROOT}}
 EnvironmentFile=%h/.config/dagent/workers/%i.env
 Environment=PYTHONUNBUFFERED=1
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStartPre=/usr/bin/test -x {{DAGENT_ROOT}}/.venv/bin/uvicorn
 ExecStartPre=/usr/bin/test -f ${DAGENT_WORKER_CONFIG}
 ExecStartPre=/bin/sh -c 'test -n "$DAGENT_WORKER_API_TOKEN"'
@@ -20,4 +21,3 @@ TimeoutStopSec=30
 
 [Install]
 WantedBy=default.target
-

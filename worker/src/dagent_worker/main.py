@@ -17,17 +17,30 @@ from uuid import uuid4
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse, PlainTextResponse
+from pydantic import ValidationError
 
 from .config import WorkerConfig, load_config
 from .jobs import JobStore, utc_now
 from .metrics import render_metrics
 from .notifier import Notifier
+from .projects import Project, ProjectError, add_project, approve_project, list_projects, resolve_project
 from .runner import JobRunner
-from .schemas import ApprovalRequest, JobRequest, JobRequeueRequest, JobResponse, JobStatus, ReadyResponse
+from .schemas import (
+    ApprovalRequest,
+    JobRequest,
+    JobRequeueRequest,
+    JobResponse,
+    JobStatus,
+    ProjectAddRequest,
+    ProjectListResponse,
+    ProjectResponse,
+    ReadyResponse,
+)
 from .security import bearer_token_matches, hash_secret, make_approval_code, verify_body_signature, verify_secret
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+NEW_PROJECT_OPTION = "New Project"
 IDEA_DOCUMENT_INTENTS = {"capture_idea"}
 IDEA_DOCUMENT_MAX_HTML_BYTES = 2_000_000
 IDEA_DOCUMENT_MAX_ASSET_BYTES = 2_500_000
@@ -140,46 +153,147 @@ def ready(request: Request, _auth: None = Depends(require_auth_sync)) -> ReadyRe
     )
 
 
+@app.get("/v1/projects", response_model=ProjectListResponse)
+def projects(
+    request: Request,
+    scan: bool = False,
+    include_new: bool = False,
+    _auth: None = Depends(require_auth_sync),
+) -> ProjectListResponse:
+    config: WorkerConfig = request.app.state.config
+    try:
+        return _project_list_response(config, scan=scan, include_new_option=include_new)
+    except ProjectError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/v1/projects/options", response_model=ProjectListResponse)
+def project_options(
+    request: Request,
+    scan: bool = True,
+    include_new: bool = True,
+    _auth: None = Depends(require_auth_sync),
+) -> ProjectListResponse:
+    config: WorkerConfig = request.app.state.config
+    try:
+        return _project_list_response(config, scan=scan, include_new_option=include_new)
+    except ProjectError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/v1/projects", response_model=ProjectResponse)
+def add_code_project(
+    body: ProjectAddRequest,
+    request: Request,
+    _auth: None = Depends(require_auth_sync),
+) -> ProjectResponse:
+    config: WorkerConfig = request.app.state.config
+    try:
+        project = _add_project(config, body)
+    except ProjectError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _project_response(project)
+
+
+@app.post("/v1/projects/approve", response_model=ProjectResponse)
+def approve_code_project(
+    request: Request,
+    body: ProjectAddRequest,
+    _auth: None = Depends(require_auth_sync),
+) -> ProjectResponse:
+    config: WorkerConfig = request.app.state.config
+    try:
+        project = approve_project(config, name=_project_request_name(body), path=body.path)
+    except ProjectError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _project_response(project)
+
+
+@app.post("/v1/shortcut")
+async def shortcut_dispatch(
+    request: Request,
+    body: dict[str, Any] = Body(default_factory=dict),
+    _auth: None = Depends(require_auth_sync),
+) -> dict[str, Any]:
+    await require_body_signature(request)
+    config: WorkerConfig = request.app.state.config
+    body = _normalize_shortcut_body(body)
+    action = _shortcut_action(body)
+
+    if action in {"list_projects", "project_list", "projects"}:
+        try:
+            response = _project_list_response(
+                config,
+                scan=_boolish(body.get("scan"), default=True),
+                include_new_option=_boolish(body.get("include_new"), default=True),
+            )
+        except ProjectError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return response.model_dump(mode="json")
+
+    if action in {"add_project", "project_add", "new_project"}:
+        try:
+            add_request = ProjectAddRequest.model_validate(
+                {
+                    "name": body.get("name"),
+                    "repo": body.get("repo"),
+                    "project": body.get("project"),
+                    "path": body.get("path") or _metadata_value(body, "project_path") or _metadata_value(body, "path"),
+                    "create_if_missing": _boolish(body.get("create_if_missing"), default=(action == "new_project")),
+                }
+            )
+            project = _add_project(config, add_request)
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=exc.errors()) from exc
+        except ProjectError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        project_response = _project_response(project).model_dump(mode="json")
+        return {
+            "status": "project_added",
+            "repo": project_response["name"],
+            "project": project_response,
+        }
+
+    if action in {"pending_approvals", "list_approvals", "approval_required"}:
+        store: JobStore = request.app.state.store
+        approvals = [
+            _approval_summary(record)
+            for record in store.list_recent(max(1, min(int(body.get("limit") or 50), 200)))
+            if record["status"] == JobStatus.approval_required.value
+        ]
+        return {"status": "ok", "approvals": approvals}
+
+    if action in {"approve_job", "approval", "approve", "reject_job", "reject"}:
+        try:
+            approval = ApprovalRequest.model_validate(
+                {
+                    "decision": _approval_decision(action, body),
+                    "approval_code": body.get("approval_code") or body.get("code"),
+                }
+            )
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=exc.errors()) from exc
+        job_id = str(body.get("job_id") or body.get("id") or "").strip()
+        if not job_id:
+            raise HTTPException(status_code=400, detail="job_id is required")
+        return _approve_job_response(request.app, job_id, approval).model_dump(mode="json")
+
+    try:
+        payload = JobRequest.model_validate(_shortcut_job_body(body))
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+    idempotency_key = payload.idempotency_key or request.headers.get("Idempotency-Key")
+    return _create_job_response(request.app, payload, idempotency_key=idempotency_key).model_dump(mode="json")
+
+
 @app.post("/v1/jobs", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_job(payload: JobRequest, request: Request, _auth: None = Depends(require_auth_sync)) -> JobResponse:
     await require_body_signature(request)
-    config: WorkerConfig = request.app.state.config
-    store: JobStore = request.app.state.store
-    notifier: Notifier = request.app.state.notifier
-
-    _validate_payload(config, payload)
-
-    payload_dict = payload.model_dump(mode="json")
-    idempotency_key = payload.idempotency_key or request.headers.get("Idempotency-Key")
-    if idempotency_key:
-        existing = store.get_by_idempotency(idempotency_key)
-        if existing:
-            if _same_idempotent_payload(existing["payload"], payload_dict):
-                return _response(existing, worker_name=request.app.state.worker_name)
-            idempotency_key = _collision_idempotency_key(idempotency_key)
-
-    approval_code: str | None = None
-    approval_hash: str | None = None
-    if config.require_approval_for(payload.intent, payload.require_approval):
-        status_value = JobStatus.approval_required.value
-        approval_code = make_approval_code()
-        approval_hash = hash_secret(approval_code)
-    else:
-        status_value = JobStatus.queued.value
-
-    record = store.create(
-        payload=payload_dict,
-        status=status_value,
-        idempotency_key=idempotency_key,
-        approval_hash=approval_hash,
+    return _create_job_response(
+        request.app,
+        payload,
+        idempotency_key=payload.idempotency_key or request.headers.get("Idempotency-Key"),
     )
-
-    if status_value == JobStatus.queued.value:
-        _submit_job(request.app, record["id"])
-    elif approval_code:
-        notifier.approval_required(record, approval_code)
-
-    return _response(record, approval_code=approval_code, worker_name=request.app.state.worker_name)
 
 
 @app.get("/v1/jobs", response_model=list[JobResponse])
@@ -521,26 +635,7 @@ async def approve_job(
     _auth: None = Depends(require_auth_sync),
 ) -> JobResponse:
     await require_body_signature(request)
-    store: JobStore = request.app.state.store
-    notifier: Notifier = request.app.state.notifier
-    record = store.get(job_id)
-    if record is None:
-        raise HTTPException(status_code=404, detail="job not found")
-    if record["status"] != JobStatus.approval_required.value:
-        raise HTTPException(status_code=409, detail=f"job is {record['status']}, not approval_required")
-
-    if not verify_secret(approval.approval_code, record["approval_hash"] or ""):
-        raise HTTPException(status_code=403, detail="invalid approval code")
-
-    if approval.decision == "reject":
-        rejected = store.set_status(job_id, JobStatus.rejected.value)
-        notifier.job_finished(rejected)
-        return _response(rejected, worker_name=request.app.state.worker_name)
-
-    store.clear_approval(job_id)
-    queued = store.set_status(job_id, JobStatus.queued.value)
-    _submit_job(request.app, job_id)
-    return _response(queued, worker_name=request.app.state.worker_name)
+    return _approve_job_response(request.app, job_id, approval)
 
 
 async def require_body_signature(request: Request) -> None:
@@ -558,12 +653,245 @@ async def require_body_signature(request: Request) -> None:
         raise HTTPException(status_code=401, detail="invalid request signature")
 
 
+def _project_list_response(config: WorkerConfig, *, scan: bool, include_new_option: bool) -> ProjectListResponse:
+    projects = [
+        ProjectResponse(
+            name=str(project.get("name") or ""),
+            path=str(project.get("path") or ""),
+            approved=bool(project.get("approved", False)),
+            source=str(project.get("source") or "unknown"),
+        )
+        for project in list_projects(config, scan=scan)
+    ]
+    options = _project_options(projects)
+    new_project_option = NEW_PROJECT_OPTION if include_new_option else None
+    if include_new_option and NEW_PROJECT_OPTION not in options:
+        options.append(NEW_PROJECT_OPTION)
+    return ProjectListResponse(
+        trusted_roots=[str(root) for root in config.trusted_roots],
+        projects=projects,
+        options=options,
+        new_project_option=new_project_option,
+    )
+
+
+def _project_options(projects: list[ProjectResponse]) -> list[str]:
+    seen: set[str] = set()
+    options: list[str] = []
+    for project in projects:
+        name = project.name.strip()
+        key = name.lower()
+        if name and key not in seen:
+            options.append(name)
+            seen.add(key)
+    return options
+
+
+def _add_project(config: WorkerConfig, body: ProjectAddRequest) -> Project:
+    name = _project_request_name(body)
+    if not name and not body.path:
+        raise ProjectError("project name, repo, project, or path is required")
+    return add_project(config, name=name, path=body.path, create_if_missing=body.create_if_missing)
+
+
+def _project_request_name(body: ProjectAddRequest) -> str | None:
+    for value in (body.name, body.repo, body.project):
+        if value and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def _project_response(project: Project) -> ProjectResponse:
+    return ProjectResponse(
+        name=project.name,
+        path=str(project.path),
+        approved=project.approved,
+        source=project.source,
+    )
+
+
+def _approval_summary(record: dict[str, Any]) -> dict[str, Any]:
+    payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+    return {
+        "id": record["id"],
+        "status": record["status"],
+        "intent": record["intent"],
+        "repo": record.get("repo"),
+        "task_preview": record["task"] if len(record["task"]) <= 180 else record["task"][:177] + "...",
+        "source": payload.get("source"),
+        "input_type": payload.get("input_type"),
+        "created_at": record["created_at"],
+        "updated_at": record["updated_at"],
+    }
+
+
+def _approval_decision(action: str, body: dict[str, Any]) -> str:
+    decision = str(body.get("decision") or "").strip().lower()
+    if decision in {"approve", "reject"}:
+        return decision
+    return "reject" if action in {"reject_job", "reject"} else "approve"
+
+
+def _approve_job_response(app_: FastAPI, job_id: str, approval: ApprovalRequest) -> JobResponse:
+    store: JobStore = app_.state.store
+    notifier: Notifier = app_.state.notifier
+    record = store.get(job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if record["status"] != JobStatus.approval_required.value:
+        raise HTTPException(status_code=409, detail=f"job is {record['status']}, not approval_required")
+
+    if not verify_secret(approval.approval_code, record["approval_hash"] or ""):
+        raise HTTPException(status_code=403, detail="invalid approval code")
+
+    if approval.decision == "reject":
+        rejected = store.set_status(job_id, JobStatus.rejected.value)
+        notifier.job_finished(rejected)
+        return _response(rejected, worker_name=app_.state.worker_name)
+
+    store.clear_approval(job_id)
+    queued = store.set_status(job_id, JobStatus.queued.value)
+    _submit_job(app_, job_id)
+    return _response(queued, worker_name=app_.state.worker_name)
+
+
+def _shortcut_action(body: dict[str, Any]) -> str:
+    action = body.get("action") or body.get("intent") or ""
+    action = str(action).strip().lower()
+    if action:
+        return action
+    return "capture_idea" if body.get("task") or body.get("text") or body.get("idea") else ""
+
+
+def _normalize_shortcut_body(body: dict[str, Any]) -> dict[str, Any]:
+    for key in ("Body", "body"):
+        raw = body.get(key)
+        if not isinstance(raw, str):
+            continue
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            merged = {**body, **parsed}
+            merged.pop(key, None)
+            return merged
+    return body
+
+
+def _shortcut_job_body(body: dict[str, Any]) -> dict[str, Any]:
+    payload = {
+        key: value
+        for key, value in body.items()
+        if key
+        not in {
+            "action",
+            "create_if_missing",
+            "idea",
+            "include_new",
+            "name",
+            "path",
+            "project",
+            "scan",
+            "text",
+            "Body",
+        }
+    }
+    if not payload.get("intent"):
+        payload["intent"] = "capture_idea"
+    if not payload.get("task"):
+        payload["task"] = body.get("text") or body.get("idea")
+    if body.get("project") and not payload.get("repo"):
+        payload["repo"] = body["project"]
+    if not payload.get("source"):
+        payload["source"] = "apple_watch"
+    elif isinstance(payload.get("source"), str):
+        payload["source"] = str(payload["source"]).strip().lower()
+    if payload.get("task") and not payload.get("input_type"):
+        payload["input_type"] = "voice"
+    elif isinstance(payload.get("input_type"), str):
+        payload["input_type"] = str(payload["input_type"]).strip().lower()
+
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    metadata = dict(metadata)
+    project_path = body.get("path") or _metadata_value(body, "project_path") or _metadata_value(body, "path")
+    if project_path and "project_path" not in metadata:
+        metadata["project_path"] = project_path
+    if _boolish(body.get("approve_project"), default=False) or _boolish(body.get("create_if_missing"), default=False):
+        metadata["approve_project"] = True
+    if metadata:
+        payload["metadata"] = metadata
+    return payload
+
+
+def _metadata_value(body: dict[str, Any], key: str) -> Any:
+    metadata = body.get("metadata")
+    if isinstance(metadata, dict):
+        return metadata.get(key)
+    return None
+
+
+def _boolish(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int | float):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _create_job_response(app_: FastAPI, payload: JobRequest, *, idempotency_key: str | None) -> JobResponse:
+    config: WorkerConfig = app_.state.config
+    store: JobStore = app_.state.store
+    notifier: Notifier = app_.state.notifier
+
+    _validate_payload(config, payload)
+
+    payload_dict = payload.model_dump(mode="json")
+    if idempotency_key:
+        existing = store.get_by_idempotency(idempotency_key)
+        if existing:
+            if _same_idempotent_payload(existing["payload"], payload_dict):
+                return _response(existing, worker_name=app_.state.worker_name)
+            idempotency_key = _collision_idempotency_key(idempotency_key)
+
+    approval_code: str | None = None
+    approval_hash: str | None = None
+    if config.require_approval_for(payload.intent, payload.require_approval):
+        status_value = JobStatus.approval_required.value
+        approval_code = make_approval_code()
+        approval_hash = hash_secret(approval_code)
+    else:
+        status_value = JobStatus.queued.value
+
+    record = store.create(
+        payload=payload_dict,
+        status=status_value,
+        idempotency_key=idempotency_key,
+        approval_hash=approval_hash,
+    )
+
+    if status_value == JobStatus.queued.value:
+        _submit_job(app_, record["id"])
+    elif approval_code:
+        notifier.approval_required(record, approval_code)
+
+    return _response(record, approval_code=approval_code, worker_name=app_.state.worker_name)
+
+
 def _validate_payload(config: WorkerConfig, payload: JobRequest) -> None:
     if payload.intent not in config.known_intents():
         raise HTTPException(status_code=403, detail=f"intent {payload.intent!r} is not allowlisted")
 
     if payload.intent in config.repo_required_intents and not payload.repo:
         raise HTTPException(status_code=400, detail=f"intent {payload.intent!r} requires repo")
+
+    if payload.intent in {"code_task", "codex_task", "claude_task"}:
+        _validate_code_project(config, payload)
+        return
 
     if payload.repo:
         repo = config.repos.get(payload.repo)
@@ -578,6 +906,29 @@ def _validate_payload(config: WorkerConfig, payload: JobRequest) -> None:
             raise HTTPException(status_code=403, detail=f"tool {payload.tool!r} is not configured")
         if not tool.allows_repo(payload.repo):
             raise HTTPException(status_code=403, detail=f"tool {payload.tool!r} is not allowed for repo {payload.repo!r}")
+
+
+def _validate_code_project(config: WorkerConfig, payload: JobRequest) -> None:
+    metadata = payload.metadata if isinstance(payload.metadata, dict) else {}
+    name = payload.repo or str(metadata.get("project") or metadata.get("repo") or "").strip() or None
+    path = str(metadata.get("project_path") or metadata.get("path") or "").strip() or None
+    if not name and not path:
+        raise HTTPException(status_code=400, detail=f"intent {payload.intent!r} requires repo, metadata.project, or metadata.project_path")
+    try:
+        project = resolve_project(config, name=name, path=path, approve=False)
+    except ProjectError as exc:
+        if metadata.get("approve_project"):
+            try:
+                resolve_project(config, name=name, path=path, allow_unapproved=True)
+            except ProjectError as approve_exc:
+                raise HTTPException(status_code=403, detail=str(approve_exc)) from approve_exc
+        else:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+    else:
+        if payload.tool:
+            tool = config.tools.get(payload.tool)
+            if tool is not None and not tool.allows_repo(project.name):
+                raise HTTPException(status_code=403, detail=f"tool {payload.tool!r} is not allowed for project {project.name!r}")
 
 
 def _submit_job(app_: FastAPI, job_id: str) -> None:

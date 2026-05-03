@@ -14,6 +14,7 @@ from typing import Any
 from .config import CommandConfig, RepoConfig, WorkerConfig
 from .jobs import JobStore
 from .notifier import Notifier
+from .projects import Project, ProjectError, resolve_project
 from .schemas import JobRequest, JobStatus
 
 
@@ -23,6 +24,9 @@ class RunnerError(RuntimeError):
 
 class RunnerCancelled(RunnerError):
     pass
+
+
+CODE_TASK_INTENTS = {"code_task", "codex_task", "claude_task"}
 
 
 class JobRunner:
@@ -83,6 +87,8 @@ class JobRunner:
     def _execute(self, job_id: str, payload: JobRequest, log_path: Path) -> dict[str, Any]:
         if payload.intent in {"capture_idea", "research_note", "document_task", "job_packet"}:
             return self._create_note(job_id, payload, log_path)
+        if payload.intent in CODE_TASK_INTENTS:
+            return self._code_task(job_id, payload, log_path)
         if payload.intent == "repo_status":
             repo = self._resolve_repo(payload.repo)
             return self._repo_status(job_id, repo, log_path)
@@ -90,6 +96,99 @@ class JobRunner:
             repo = self._resolve_repo(payload.repo)
             return self._script_task(job_id, payload, repo, log_path)
         return self._tool_task(job_id, payload, log_path)
+
+    def _code_task(self, job_id: str, payload: JobRequest, log_path: Path) -> dict[str, Any]:
+        project = self._resolve_code_project(payload)
+        flavor = _code_flavor(self._config, payload)
+        tool = self._config.tools.get(flavor)
+        if tool is None:
+            tool = _builtin_code_tool(self._config, flavor)
+        if not tool.allows_repo(project.name):
+            raise RunnerError(f"code flavor {flavor!r} is not allowed for project {project.name!r}")
+
+        worktree_path = self._create_code_worktree(job_id, payload, project, log_path)
+        branch = self._current_branch(job_id, worktree_path, log_path)
+        summary_path = worktree_path / ".dagent" / f"{job_id}-summary.md"
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        prompt = _code_prompt(payload, project=project, worktree_path=worktree_path, branch=branch)
+        command = _render_command(
+            tool.command,
+            payload=payload,
+            repo=_project_repo_config(project),
+            job_id=job_id,
+            extra={
+                "branch": branch,
+                "flavor": flavor,
+                "project": project.name,
+                "project_path": str(project.path),
+                "workspace_path": str(worktree_path),
+                "summary_path": str(summary_path),
+                "prompt": prompt,
+            },
+        )
+
+        with log_path.open("a", encoding="utf-8") as log:
+            log.write(f"Code task project: {project.name} ({project.path})\n")
+            log.write(f"Worktree: {worktree_path}\n")
+            log.write(f"Branch: {branch}\n")
+            log.write(f"Flavor: {flavor}\n")
+            if payload.dry_run:
+                log.write("Dry run: agent command was not executed.\n")
+
+        if payload.dry_run:
+            completed = {"exit_code": 0, "stdout": "", "stderr": ""}
+        else:
+            completed = self._run_command(
+                job_id,
+                command,
+                worktree_path,
+                timeout_seconds=tool.timeout_seconds,
+                log_path=log_path,
+            )
+
+        status_short = self._git_output(job_id, worktree_path, ["git", "status", "--short"], log_path)
+        raw_diff_stat = self._git_output(job_id, worktree_path, ["git", "diff", "--stat"], log_path)
+        changed_files = _changed_files_from_status(status_short)
+        diff_stat = raw_diff_stat or _untracked_diff_stat(changed_files, status_short)
+        last_message = summary_path.read_text(encoding="utf-8") if summary_path.exists() else ""
+        if _agent_reported_failure(last_message, completed["stdout"], completed["stderr"]):
+            raise RunnerError(_agent_failure_error(flavor, last_message))
+        final_note_path = self._write_code_completion_note(
+            job_id=job_id,
+            payload=payload,
+            project=project,
+            flavor=flavor,
+            worktree_path=worktree_path,
+            branch=branch,
+            changed_files=changed_files,
+            diff_stat=diff_stat,
+            last_message=last_message,
+        )
+        result = {
+            "kind": "code_task",
+            "project": project.name,
+            "project_path": str(project.path),
+            "project_source": project.source,
+            "workspace_path": str(worktree_path),
+            "branch": branch,
+            "flavor": flavor,
+            "command": shlex.join(command),
+            "exit_code": completed["exit_code"],
+            "stdout_tail": _tail(completed["stdout"]),
+            "stderr_tail": _tail(completed["stderr"]),
+            "status_short": status_short,
+            "diff_stat": diff_stat,
+            "changed_files": changed_files,
+            "last_message": _tail(last_message),
+            "completion_note_path": str(final_note_path),
+            "code_server_url": _code_server_url(self._config, worktree_path),
+        }
+        with log_path.open("a", encoding="utf-8") as log:
+            log.write("\nDONE code task\n")
+            log.write(f"Completion note: {final_note_path}\n")
+            if result["code_server_url"]:
+                log.write(f"Code-server: {result['code_server_url']}\n")
+        return result
 
     def _resolve_repo(self, repo_name: str | None) -> RepoConfig:
         if not repo_name:
@@ -102,6 +201,89 @@ class JobRunner:
         if not repo.path.is_dir():
             raise RunnerError(f"repo path is not a directory: {repo.path}")
         return repo
+
+    def _resolve_code_project(self, payload: JobRequest) -> Project:
+        metadata = payload.metadata if isinstance(payload.metadata, dict) else {}
+        name = payload.repo or str(metadata.get("project") or metadata.get("repo") or "").strip() or None
+        path = str(metadata.get("project_path") or metadata.get("path") or "").strip() or None
+        approve = bool(metadata.get("approve_project"))
+        try:
+            return resolve_project(self._config, name=name, path=path, approve=approve)
+        except ProjectError as exc:
+            raise RunnerError(str(exc)) from exc
+
+    def _create_code_worktree(self, job_id: str, payload: JobRequest, project: Project, log_path: Path) -> Path:
+        use_worktree = payload.metadata.get("worktree", True) is not False
+        if not use_worktree:
+            return project.path
+        worktrees_root = self._config.code_worktrees_dir or (self._config.data_dir / "code-worktrees")
+        worktrees_root.mkdir(parents=True, exist_ok=True)
+        worktree_path = (worktrees_root / f"{project.name}-{job_id[:8]}").resolve()
+        if worktree_path.exists():
+            raise RunnerError(f"worktree already exists: {worktree_path}")
+        branch = _branch_name(payload.task, job_id)
+        self._run_command(
+            job_id,
+            ["git", "worktree", "add", "-b", branch, str(worktree_path), "HEAD"],
+            project.path,
+            timeout_seconds=120,
+            log_path=log_path,
+        )
+        return worktree_path
+
+    def _current_branch(self, job_id: str, path: Path, log_path: Path) -> str:
+        return self._git_output(job_id, path, ["git", "branch", "--show-current"], log_path).strip()
+
+    def _git_output(self, job_id: str, cwd: Path, command: list[str], log_path: Path) -> str:
+        try:
+            completed = self._run_command(job_id, command, cwd, timeout_seconds=60, log_path=log_path)
+        except RunnerError:
+            return ""
+        return completed["stdout"].strip()
+
+    def _write_code_completion_note(
+        self,
+        *,
+        job_id: str,
+        payload: JobRequest,
+        project: Project,
+        flavor: str,
+        worktree_path: Path,
+        branch: str,
+        changed_files: list[str],
+        diff_stat: str,
+        last_message: str,
+    ) -> Path:
+        note_path = worktree_path / ".dagent" / f"{job_id}-DONE.md"
+        lines = [
+            f"# DONE: {project.name}",
+            "",
+            f"- Job: `{job_id}`",
+            f"- Flavor: `{flavor}`",
+            f"- Branch: `{branch}`",
+            f"- Project: `{project.path}`",
+            f"- Worktree: `{worktree_path}`",
+            "",
+            "## Task",
+            "",
+            payload.task,
+            "",
+            "## Changed Files",
+            "",
+            *(f"- `{path}`" for path in changed_files),
+            "" if changed_files else "- No changed files detected.",
+            "",
+            "## Diff Stat",
+            "",
+            "```",
+            diff_stat or "No diff.",
+            "```",
+        ]
+        if last_message.strip():
+            lines.extend(["", "## Agent Final Message", "", last_message.strip()])
+        note_path.parent.mkdir(parents=True, exist_ok=True)
+        note_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+        return note_path
 
     def _create_note(self, job_id: str, payload: JobRequest, log_path: Path) -> dict[str, Any]:
         self._config.notes_dir.mkdir(parents=True, exist_ok=True)
@@ -280,7 +462,14 @@ class JobRunner:
                 log.write(f"Notification {status}: {result.get('topic')} ({detail})\n")
 
 
-def _render_command(command: tuple[str, ...], *, payload: JobRequest, repo: RepoConfig, job_id: str) -> list[str]:
+def _render_command(
+    command: tuple[str, ...],
+    *,
+    payload: JobRequest,
+    repo: RepoConfig,
+    job_id: str,
+    extra: dict[str, str] | None = None,
+) -> list[str]:
     context: dict[str, str] = {
         "task": payload.task,
         "repo": repo.name,
@@ -288,6 +477,8 @@ def _render_command(command: tuple[str, ...], *, payload: JobRequest, repo: Repo
         "github_account": repo.github_account,
         "job_id": job_id,
     }
+    if extra:
+        context.update(extra)
     for key, value in payload.metadata.items():
         if isinstance(value, (str, int, float, bool)):
             context[f"meta_{key}"] = str(value)
@@ -304,6 +495,84 @@ def _slug(text: str) -> str:
     return (slug or "note")[:60]
 
 
+def _branch_name(task: str, job_id: str) -> str:
+    return f"agent/{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{_slug(task)[:42]}-{job_id[:8]}"
+
+
+def _project_repo_config(project: Project) -> RepoConfig:
+    return RepoConfig(name=project.name, path=project.path, allowed_intents=("*",))
+
+
+def _code_flavor(config: WorkerConfig, payload: JobRequest) -> str:
+    metadata_flavor = str(payload.metadata.get("flavor") or "").strip()
+    if metadata_flavor:
+        return metadata_flavor
+    if payload.tool:
+        return payload.tool
+    if payload.intent == "claude_task":
+        return "claude"
+    if payload.intent == "codex_task":
+        return "codex"
+    return config.intent_tools.get(payload.intent) or "codex"
+
+
+def _builtin_code_tool(config: WorkerConfig, flavor: str) -> CommandConfig:
+    if flavor == "codex":
+        return CommandConfig(
+            name="codex",
+            command=(
+                "codex",
+                "--ask-for-approval",
+                config.code_codex_approval_policy,
+                "--sandbox",
+                config.code_codex_sandbox,
+                "exec",
+                "--cd",
+                "{workspace_path}",
+                "--output-last-message",
+                "{summary_path}",
+                "{prompt}",
+            ),
+            timeout_seconds=7200,
+            allowed_repos=("*",),
+        )
+    raise RunnerError(f"code flavor {flavor!r} is not configured")
+
+
+def _code_prompt(payload: JobRequest, *, project: Project, worktree_path: Path, branch: str) -> str:
+    return "\n".join(
+        [
+            "You are running inside dAgent's Code Task Worker.",
+            f"Project: {project.name}",
+            f"Source path: {project.path}",
+            f"Workspace path: {worktree_path}",
+            f"Branch: {branch}",
+            "",
+            "User task:",
+            payload.task,
+            "",
+            "Rules:",
+            "- Work only inside this workspace.",
+            "- Keep edits scoped to the requested feature or fix.",
+            "- Run the most relevant tests/checks you can find.",
+            "- Leave the workspace ready for human review.",
+            "- End with a concise summary, changed files, and tests run.",
+        ]
+    )
+
+
+def _code_server_url(config: WorkerConfig, workspace_path: Path) -> str:
+    if config.code_server_folder_url_template:
+        return config.code_server_folder_url_template.format(folder=quote_path(workspace_path), path=str(workspace_path))
+    return config.code_server_url
+
+
+def quote_path(path: Path) -> str:
+    from urllib.parse import quote
+
+    return quote(str(path), safe="")
+
+
 def _jsonish(value: Any) -> str:
     import json
 
@@ -317,6 +586,53 @@ def _command_result(command: list[str], completed: dict[str, Any]) -> dict[str, 
         "stdout_tail": _tail(completed["stdout"]),
         "stderr_tail": _tail(completed["stderr"]),
     }
+
+
+def _changed_files_from_status(status_short: str) -> list[str]:
+    files: list[str] = []
+    for line in status_short.splitlines():
+        if not line.strip():
+            continue
+        path = line[3:].strip() if len(line) > 3 else line.strip()
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        if path and not _is_internal_code_task_path(path):
+            files.append(path)
+    return files
+
+
+def _untracked_diff_stat(changed_files: list[str], status_short: str) -> str:
+    untracked = []
+    for line in status_short.splitlines():
+        if not line.startswith("?? "):
+            continue
+        path = line[3:].strip()
+        if path in changed_files:
+            untracked.append(f"{path} | new file")
+    return "\n".join(untracked)
+
+
+def _is_internal_code_task_path(path: str) -> bool:
+    return path == ".dagent" or path.startswith(".dagent/")
+
+
+def _agent_reported_failure(last_message: str, stdout: str, stderr: str) -> bool:
+    text = "\n".join([last_message, stdout, stderr]).lower()
+    failure_signals = (
+        "blocked by the workspace environment",
+        "requested file was not created",
+        "could not create",
+        "could not complete",
+        "shell commands failed before execution",
+        "sandbox startup failure",
+        "bwrap sandbox error",
+    )
+    return any(signal in text for signal in failure_signals)
+
+
+def _agent_failure_error(flavor: str, last_message: str) -> str:
+    detail = last_message.strip().splitlines()[0] if last_message.strip() else "agent reported failure"
+    return f"{flavor} did not complete the task: {detail}"
 
 
 def _tail(text: str, limit: int = 6000) -> str:

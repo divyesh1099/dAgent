@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 class InputType(str, Enum):
     text = "text"
     voice = "voice"
+    shortcut = "shortcut"
     image = "image"
     file = "file"
     mixed = "mixed"
@@ -98,6 +99,30 @@ class JobResponse(BaseModel):
     error: str | None = None
     log_path: str | None = None
     approval_code: str | None = None
+
+
+class ProjectAddRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=240)
+    repo: str | None = Field(default=None, min_length=1, max_length=240)
+    project: str | None = Field(default=None, min_length=1, max_length=240)
+    path: str | None = Field(default=None, min_length=1, max_length=2000)
+    create_if_missing: bool = False
+
+
+class ProjectResponse(BaseModel):
+    name: str
+    path: str
+    approved: bool
+    source: str
+
+
+class ProjectListResponse(BaseModel):
+    trusted_roots: list[str]
+    projects: list[ProjectResponse]
+    options: list[str] = Field(default_factory=list)
+    new_project_option: str | None = None
 
 
 class JobRequeueRequest(BaseModel):

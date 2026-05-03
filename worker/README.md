@@ -30,6 +30,10 @@ uvicorn dagent_worker.main:app --host 127.0.0.1 --port 8765
 - `GET /ui`: worker dashboard for runs, logs, retries, edits, and ntfy resend.
 - `GET /health`: unauthenticated liveness check.
 - `GET /ready`: authenticated config/ready check.
+- `GET /v1/projects`: list configured and registered projects.
+- `GET /v1/projects/options`: list project names for Apple Shortcuts.
+- `POST /v1/projects`: register or create a project under `trusted_roots`.
+- `POST /v1/shortcut`: dispatch Shortcut requests for project list/add or jobs.
 - `POST /v1/jobs`: create a job.
 - `GET /v1/jobs`: list recent jobs.
 - `GET /v1/jobs/{job_id}`: inspect one job.

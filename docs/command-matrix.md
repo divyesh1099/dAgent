@@ -7,6 +7,7 @@ Use this as the first allowlist. Add commands slowly.
 | Capture idea | `capture_idea` | Watch/phone | Worker | No | Markdown note + ntfy |
 | Start research note | `research_note` | Watch/phone | Worker/n8n | No for note, yes for web automation | Markdown/PDF/doc link |
 | Repo status | `repo_status` | Watch/phone/laptop | Worker | No | Branch, dirty files, latest commit |
+| Code task | `code_task` | Watch/phone/laptop | Worker | Yes | Isolated worktree, branch, code-server link, diff summary |
 | Codex task | `codex_task` | Watch/phone/laptop | Worker | Yes | Job log, patch summary |
 | Claude task | `claude_task` | Watch/phone/laptop | Worker | Yes | Job log, patch summary |
 | Run tests | `script_task` | Phone/laptop | Worker | Usually no for read-only tests | Test log |
@@ -39,4 +40,3 @@ Use this as the first allowlist. Add commands slowly.
 - iPhone/Android: richer text, image, file, and share sheet input.
 - Laptop: complex prompts, review, and manual final actions.
 - Workstation: execution, local tools, GPU, repos, Docker, browser profiles.
-

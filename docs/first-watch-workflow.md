@@ -6,7 +6,7 @@ Goal:
 Apple Watch / iPhone Shortcut
   -> Cloudflare Access
   -> n8n webhook
-  -> dAgent worker /v1/jobs
+  -> dAgent worker /v1/shortcut
   -> note in .data/notes + ntfy notification
 ```
 
@@ -102,11 +102,12 @@ Connect `Webhook` -> `HTTP Request`.
 
 ```text
 Method: POST
-URL: ={{ $env.DAGENT_WORKER_URL }}/v1/jobs
+URL: ={{ $env.DAGENT_WORKER_URL }}/v1/shortcut
 Send Headers: on
 Send Body: on
 Body Content Type: JSON
-Specify Body: Using Fields Below
+Specify Body: JSON
+JSON Body: ={{ $json.payload }}
 ```
 
 Headers:
@@ -133,15 +134,9 @@ The helper command sets this:
 scripts/n8nctl watch-env
 ```
 
-Body fields:
-
-```text
-source: apple_watch
-intent: capture_idea
-task: ={{ $json.body.task || $json.body.text || $json.body.idea }}
-input_type: voice
-idempotency_key: ={{ $json.idempotency_key }}
-```
+Do not use `Using Fields Below` for this workflow. That mode can accidentally
+send a field named `Body` containing JSON text, which the worker treats as an
+invalid job payload if the workflow is still pointed at `/v1/jobs`.
 
 Save the workflow.
 

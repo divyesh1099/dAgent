@@ -60,12 +60,25 @@ class Notifier:
         priority = "high" if status == "failed" else "default"
         tags = "x" if status == "failed" else "white_check_mark"
         note_path = ""
+        extra_lines: list[str] = []
         result = job.get("result")
         if isinstance(result, dict):
             note_path = str(result.get("note_path") or "")
+            if result.get("kind") == "code_task":
+                if result.get("project"):
+                    extra_lines.append(f"Project: {result['project']}")
+                if result.get("branch"):
+                    extra_lines.append(f"Branch: {result['branch']}")
+                changed_files = result.get("changed_files")
+                if isinstance(changed_files, list):
+                    extra_lines.append(f"Changed files: {len(changed_files)}")
+                if result.get("code_server_url"):
+                    extra_lines.append(f"Code-server: {result['code_server_url']}")
         message = f"Job {job['id']} finished with status {status}.\nRepo: {job.get('repo') or '-'}"
         if note_path:
             message += f"\nNote: {note_path}"
+        if extra_lines:
+            message += "\n" + "\n".join(extra_lines)
         return self.send(
             title=f"dAgent job {status}: {job['intent']}",
             message=message,

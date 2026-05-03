@@ -22,7 +22,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const input = $input.first().json;\nconst headers = input.headers || {};\nconst body = input.body || {};\nconst env = typeof $env !== 'undefined' ? $env : {};\n\nfunction header(name) {\n  const wanted = name.toLowerCase();\n  for (const [key, value] of Object.entries(headers)) {\n    if (key.toLowerCase() === wanted) return value;\n  }\n  return undefined;\n}\n\nconst expectedSecret = env.DAGENT_SHORTCUT_SECRET || '';\nconst providedSecret = header('x-dagent-shortcut-secret') || '';\nif (!expectedSecret || providedSecret !== expectedSecret) {\n  throw new Error('invalid shortcut secret');\n}\n\nconst task = body.task || body.text || body.idea;\nif (!task || !String(task).trim()) {\n  throw new Error('task is required');\n}\n\nconst requestId = header('cf-ray') || header('x-request-id') || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;\nconst idempotencyKey = `watch-${$execution.id}-${requestId}`.slice(0, 160);\nconst payload = {\n  intent: body.intent || 'capture_idea',\n  task: String(task),\n  source: body.source || 'apple_watch',\n  input_type: body.input_type || 'voice',\n  idempotency_key: idempotencyKey,\n};\n\nfor (const key of ['repo', 'tool', 'files', 'priority', 'require_approval', 'dry_run', 'metadata']) {\n  if (body[key] !== undefined && body[key] !== null && body[key] !== '') {\n    payload[key] = body[key];\n  }\n}\n\nreturn [{ json: { payload, idempotency_key: idempotencyKey } }];"
+        "jsCode": "const input = $input.first().json;\nconst headers = input.headers || {};\nconst body = input.body || {};\nconst env = typeof $env !== 'undefined' ? $env : {};\n\nfunction header(name) {\n  const wanted = name.toLowerCase();\n  for (const [key, value] of Object.entries(headers)) {\n    if (key.toLowerCase() === wanted) return value;\n  }\n  return undefined;\n}\n\nconst expectedSecret = env.DAGENT_SHORTCUT_SECRET || '';\nconst providedSecret = header('x-dagent-shortcut-secret') || '';\nif (!expectedSecret || providedSecret !== expectedSecret) {\n  throw new Error('invalid shortcut secret');\n}\n\nconst requestId = header('cf-ray') || header('x-request-id') || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;\nconst idempotencyKey = `watch-${$execution.id}-${requestId}`.slice(0, 160);\nconst payload = {...body};\n\nif (!payload.intent && !payload.action && (payload.task || payload.text || payload.idea)) {\n  payload.intent = 'capture_idea';\n}\nif (!payload.task && (payload.text || payload.idea)) {\n  payload.task = payload.text || payload.idea;\n}\nif (!payload.source) {\n  payload.source = 'apple_watch';\n}\nif (payload.task && !payload.input_type) {\n  payload.input_type = 'voice';\n}\nif (payload.task && !payload.idempotency_key) {\n  payload.idempotency_key = idempotencyKey;\n}\n\nreturn [{ json: { payload, idempotency_key: payload.idempotency_key || idempotencyKey } }];"
       },
       "id": "420f3c76-934a-44a6-b91f-5f6b2d02aca8",
       "name": "Normalize Request",
@@ -36,7 +36,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ ($env.DAGENT_WORKER_URL || 'http://host.docker.internal:8765').replace(/\\/$/, '') + '/v1/jobs' }}",
+        "url": "={{ ($env.DAGENT_WORKER_URL || 'http://host.docker.internal:8765').replace(/\\/$/, '') + '/v1/shortcut' }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [

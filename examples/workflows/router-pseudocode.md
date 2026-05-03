@@ -13,13 +13,13 @@ Webhook /dagent/<random>
     task = body.task
     repo = body.repo || null
 
-  If intent is missing or task is missing:
+  If intent is missing:
     Respond 400
 
   HTTP Request:
-    POST ${DAGENT_WORKER_URL}/v1/jobs
+    POST ${DAGENT_WORKER_URL}/v1/shortcut
     Authorization: Bearer ${DAGENT_WORKER_API_TOKEN}
-    Idempotency-Key: n8n execution id or shortcut run id
+    Idempotency-Key: n8n execution id or shortcut run id for task requests
     JSON normalized body
 
   If worker says approval_required:
@@ -28,4 +28,3 @@ Webhook /dagent/<random>
   Respond with:
     job_id, status, message
 ```
-

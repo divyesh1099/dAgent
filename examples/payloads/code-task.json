@@ -1,0 +1,12 @@
+{
+  "source": "apple_watch",
+  "intent": "code_task",
+  "repo": "dagent",
+  "task": "Add a small health check badge to the dashboard and run the relevant tests.",
+  "input_type": "voice",
+  "require_approval": true,
+  "metadata": {
+    "flavor": "codex"
+  },
+  "idempotency_key": "example-code-task-001"
+}

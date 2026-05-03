@@ -2,6 +2,18 @@
 
 data_dir: .data/worker
 notes_dir: .data/notes
+trusted_roots:
+  - /home/divyesh-nandlal-vishwakarma/Desktop/Divyesh
+auto_approve_trusted_projects: true
+code:
+  worktrees_dir: .data/code-worktrees
+  code_server_url: "http://127.0.0.1:8766"
+  # Example once code-server is behind Cloudflare:
+  code_server_folder_url_template: "http://127.0.0.1:8766/?folder={folder}"
+  # Keep workspace-write where bubblewrap works; use danger-full-access only behind approval
+  # and with worktree isolation when the service cannot create Codex's Linux sandbox.
+  codex_sandbox: workspace-write
+  codex_approval_policy: never
 max_parallel_jobs: 2
 default_require_approval: true
 
@@ -12,6 +24,7 @@ auto_run_intents:
   - repo_status
 
 approval_required_intents:
+  - code_task
   - codex_task
   - claude_task
   - script_task
@@ -21,11 +34,10 @@ approval_required_intents:
 
 repo_required_intents:
   - repo_status
-  - codex_task
-  - claude_task
   - script_task
 
 intent_tools:
+  code_task: codex
   codex_task: codex
   claude_task: claude
 
@@ -36,20 +48,13 @@ repos:
     default_tool: codex
     allowed_intents:
       - repo_status
+      - code_task
       - codex_task
       - claude_task
       - script_task
 
 tools:
-  codex:
-    command:
-      - codex
-      - exec
-      - "{task}"
-    timeout_seconds: 7200
-    allowed_repos:
-      - "*"
-
+  # Omit codex here to use the built-in code-task command.
   claude:
     command:
       - claude
