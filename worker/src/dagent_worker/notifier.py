@@ -14,7 +14,15 @@ class Notifier:
     def enabled(self) -> bool:
         return bool(self._config.ntfy_url and self._config.ntfy_topics)
 
-    def send(self, *, title: str, message: str, priority: str = "default", tags: str = "") -> list[dict[str, Any]]:
+    def send(
+        self,
+        *,
+        title: str,
+        message: str,
+        priority: str = "default",
+        tags: str = "",
+        markdown: bool = False,
+    ) -> list[dict[str, Any]]:
         if not self.enabled():
             return []
 
@@ -23,6 +31,9 @@ class Notifier:
             "X-Title": title,
             "X-Priority": priority,
         }
+        if markdown:
+            headers["X-Markdown"] = "yes"
+            headers["Content-Type"] = "text/markdown; charset=utf-8"
         if tags:
             headers["X-Tags"] = tags
         if self._config.ntfy_token:
@@ -74,6 +85,23 @@ class Notifier:
                     extra_lines.append(f"Changed files: {len(changed_files)}")
                 if result.get("code_server_url"):
                     extra_lines.append(f"Code-server: {result['code_server_url']}")
+            if result.get("kind") == "chatgpt_task":
+                if result.get("workspace_path"):
+                    extra_lines.append(f"Workspace: {result['workspace_path']}")
+                last_message = str(result.get("last_message") or "").strip()
+                if last_message:
+                    extra_lines.append(f"Response: {last_message[:1500]}")
+                title = "ChatGPT reply" if status == "succeeded" else f"ChatGPT task {status}"
+                message = last_message or f"Job {job['id']} finished with status {status}."
+                if job.get("task"):
+                    message = f"Task: {str(job.get('task'))[:300]}\n\n{message}"
+                return self.send(
+                    title=title,
+                    message=message,
+                    priority=priority,
+                    tags=tags,
+                    markdown=True,
+                )
         message = f"Job {job['id']} finished with status {status}.\nRepo: {job.get('repo') or '-'}"
         if note_path:
             message += f"\nNote: {note_path}"

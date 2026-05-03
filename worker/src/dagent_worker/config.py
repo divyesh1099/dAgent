@@ -61,6 +61,9 @@ class WorkerConfig:
     code_server_folder_url_template: str = ""
     code_codex_sandbox: str = "workspace-write"
     code_codex_approval_policy: str = "never"
+    agent_workspace_dir: Path | None = None
+    agent_summaries_dir: Path | None = None
+    agent_timeout_seconds: int = 7200
     max_parallel_jobs: int = 2
     default_require_approval: bool = True
     auto_run_intents: frozenset[str] = field(default_factory=frozenset)
@@ -147,6 +150,11 @@ def load_config(path: str | os.PathLike[str] | None = None) -> WorkerConfig:
     )
     if code_codex_approval_policy not in {"untrusted", "on-failure", "on-request", "never"}:
         raise ConfigError("code.codex_approval_policy must be untrusted, on-failure, on-request, or never")
+    agent_raw = raw.get("agent", {}) or {}
+    if not isinstance(agent_raw, dict):
+        raise ConfigError("agent must be a YAML mapping")
+    agent_workspace_dir = _optional_path(agent_raw.get("workspace_dir"), base_dir)
+    agent_summaries_dir = _optional_path(agent_raw.get("summaries_dir"), base_dir)
 
     repos = _load_repos(raw.get("repos", {}) or {})
     tools = _load_commands(raw.get("tools", {}) or {})
@@ -162,6 +170,9 @@ def load_config(path: str | os.PathLike[str] | None = None) -> WorkerConfig:
         code_server_folder_url_template=code_server_folder_url_template,
         code_codex_sandbox=code_codex_sandbox,
         code_codex_approval_policy=code_codex_approval_policy,
+        agent_workspace_dir=agent_workspace_dir,
+        agent_summaries_dir=agent_summaries_dir,
+        agent_timeout_seconds=int(agent_raw.get("timeout_seconds", 7200)),
         max_parallel_jobs=int(raw.get("max_parallel_jobs", 2)),
         default_require_approval=bool(raw.get("default_require_approval", True)),
         auto_run_intents=frozenset(_string_list(raw.get("auto_run_intents", []), "auto_run_intents")),
@@ -225,3 +236,9 @@ def _resolve_path(value: Any, base_dir: Path) -> Path:
     if not path.is_absolute():
         path = base_dir / path
     return path.resolve()
+
+
+def _optional_path(value: Any, base_dir: Path) -> Path | None:
+    if value is None or str(value).strip() == "":
+        return None
+    return _resolve_path(value, base_dir)

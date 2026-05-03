@@ -17,6 +17,8 @@ Usage:
   scripts/n8nctl health   Check local n8n URL
   scripts/n8nctl startup  Install boot/login startup service
   scripts/n8nctl public   Test public Cloudflare route
+  scripts/n8nctl import-workflows [workflow.json]
+                         Import and publish the checked-in dAgent workflow
   scripts/n8nctl access-env <client-id> <client-secret>
                          Store Cloudflare Access service-token headers
   scripts/n8nctl watch-env Configure env vars for watch webhook workflow
@@ -77,6 +79,12 @@ compose_services() {
     services+=(cloudflared)
   fi
   printf '%s\n' "${services[@]}"
+}
+
+local_n8n_url() {
+  local port
+  port="$(env_value N8N_PORT || true)"
+  echo "http://127.0.0.1:${port:-5678}"
 }
 
 tunnel_enabled() {
@@ -155,6 +163,57 @@ cmd_logs() {
   compose_with_tunnel logs -f --tail=120 "${services[@]}"
 }
 
+cmd_wait() {
+  local url
+  url="$(local_n8n_url)"
+  echo "Waiting for n8n on $url ..."
+  for _ in $(seq 1 60); do
+    if curl -fsS -I "$url" >/dev/null 2>&1; then
+      echo "n8n is reachable locally."
+      return 0
+    fi
+    sleep 2
+  done
+  echo "n8n did not become reachable in time. Check logs with: scripts/n8nctl logs" >&2
+  return 1
+}
+
+cmd_import_workflows() {
+  local workflow="${1:-docker/automation-stack/n8n/workflows/router-webhook.json}"
+  if [[ ! -f "$workflow" ]]; then
+    echo "Workflow export not found: $workflow" >&2
+    exit 1
+  fi
+
+  cmd_up
+  cmd_wait
+
+  local basename
+  basename="$(basename "$workflow")"
+  local container_path="/tmp/dagent-$basename"
+  docker_cli compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" cp "$workflow" "n8n:$container_path"
+  compose exec -T n8n n8n import:workflow --input="$container_path"
+
+  local workflow_id
+  workflow_id="$(python3 - "$workflow" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    print(json.load(handle).get("id", ""))
+PY
+)"
+  if [[ -n "$workflow_id" ]]; then
+    compose exec -T n8n n8n publish:workflow --id="$workflow_id" \
+      || compose exec -T n8n n8n update:workflow --id="$workflow_id" --active=true
+    echo "Imported and activated workflow: $workflow_id"
+  else
+    echo "Imported workflow. No workflow id was present to activate automatically."
+  fi
+}
+
 case "${1:-help}" in
   up) cmd_up ;;
   down) compose down ;;
@@ -162,8 +221,10 @@ case "${1:-help}" in
   ps) compose_with_tunnel ps ;;
   logs) cmd_logs ;;
   health)
-    curl -fsS -I http://127.0.0.1:5678 | sed -n '1,12p'
+    curl -fsS -I "$(local_n8n_url)" | sed -n '1,12p'
     ;;
+  wait) cmd_wait ;;
+  import-workflows|import-workflow|import) cmd_import_workflows "${2:-docker/automation-stack/n8n/workflows/router-webhook.json}" ;;
   startup) scripts/install_automation_startup.sh ;;
   public) scripts/test_n8n_public.sh ;;
   access-env)

@@ -1,0 +1,47 @@
+# Copy to worker/config.chatgpt.yml for the ChatGPT worker.
+#
+# This profile is intentionally powerful: it auto-runs chatgpt_task without the
+# normal dAgent approval gate and uses Codex in danger-full-access mode. Keep
+# the worker API token private and expose this worker only to trusted local
+# services such as the bundled n8n router.
+
+data_dir: .data/worker-chatgpt
+notes_dir: .data/chatgpt-notes
+trusted_roots:
+  - .
+auto_approve_trusted_projects: true
+
+code:
+  worktrees_dir: .data/code-worktrees-chatgpt
+  code_server_url: "http://127.0.0.1:8766"
+  code_server_folder_url_template: "http://127.0.0.1:8766/?folder={folder}"
+  codex_sandbox: danger-full-access
+  codex_approval_policy: never
+
+agent:
+  workspace_dir: .
+  summaries_dir: .data/chatgpt-summaries
+  timeout_seconds: 7200
+
+max_parallel_jobs: 1
+default_require_approval: false
+
+auto_run_intents:
+  - capture_idea
+  - chatgpt_task
+
+approval_required_intents: []
+repo_required_intents: []
+
+intent_tools:
+  chatgpt_task: codex
+
+repos: {}
+tools: {}
+scripts: {}
+
+notifications:
+  ntfy_url: ""
+  ntfy_topics:
+    - dagent
+  ntfy_token: ""

@@ -12,7 +12,8 @@ usage() {
   cat <<'EOF'
 Usage:
   scripts/dagentctl up [name] [port]        Create, install, enable, and start a worker
-  scripts/dagentctl init [name] [port]      Create a worker env file
+  scripts/dagentctl init [name] [port] [config]
+                                           Create a worker env file
   scripts/dagentctl install                 Install/update the systemd user unit
   scripts/dagentctl boot                    Enable user services at PC boot
   scripts/dagentctl start [name]            Start a worker
@@ -36,6 +37,10 @@ Usage:
 Defaults:
   name: main
   port: 8765
+
+Environment:
+  DAGENT_WORKER_BIND_HOST  Host written for new workers. Defaults to 0.0.0.0 so
+                           Dockerized n8n can reach host workers.
 EOF
 }
 
@@ -44,8 +49,8 @@ main() {
   shift || true
 
   case "$command" in
-    up) cmd_up "${1:-main}" "${2:-8765}" ;;
-    init|new|add) cmd_init "${1:-main}" "${2:-8765}" ;;
+    up) cmd_up "${1:-main}" "${2:-8765}" "${3:-}" ;;
+    init|new|add) cmd_init "${1:-main}" "${2:-8765}" "${3:-}" ;;
     install) cmd_install ;;
     boot) cmd_boot ;;
     start) systemctl_user start "$(unit "${1:-main}")" ;;
@@ -73,9 +78,10 @@ main() {
 cmd_up() {
   local name="$1"
   local port="$2"
+  local config_path="$3"
 
   if [[ ! -f "$(env_file "$name")" ]]; then
-    cmd_init "$name" "$port"
+    cmd_init "$name" "$port" "$config_path"
   fi
 
   cmd_install
@@ -89,6 +95,7 @@ cmd_up() {
 cmd_init() {
   local name="$1"
   local port="$2"
+  local config_path="${3:-}"
   validate_name "$name"
   mkdir -p "$WORKER_ENV_DIR"
 
@@ -101,13 +108,19 @@ cmd_init() {
 
   local token
   token="$(random_hex 32)"
+  local host
+  host="${DAGENT_WORKER_BIND_HOST:-0.0.0.0}"
+  if [[ -z "$config_path" ]]; then
+    config_path="$(default_config_path "$name")"
+  fi
+  ensure_config_file "$name" "$config_path"
 
   umask 077
   cat >"$file" <<EOF
 DAGENT_WORKER_NAME=$name
-DAGENT_WORKER_HOST=127.0.0.1
+DAGENT_WORKER_HOST=$host
 DAGENT_WORKER_PORT=$port
-DAGENT_WORKER_CONFIG=$ROOT/worker/config.yml
+DAGENT_WORKER_CONFIG=$config_path
 DAGENT_WORKER_API_TOKEN=$token
 DAGENT_WORKER_HMAC_SECRET=
 DAGENT_DATA_DIR=$ROOT/.data/worker-$name
@@ -154,7 +167,7 @@ cmd_boot() {
 cmd_health() {
   local name="$1"
   load_worker_env "$name"
-  local url="http://${DAGENT_WORKER_HOST}:${DAGENT_WORKER_PORT}"
+  local url="http://$(local_worker_host):${DAGENT_WORKER_PORT}"
 
   curl -fsS "$url/health"
   echo
@@ -166,7 +179,7 @@ cmd_jobs() {
   local name="$1"
   local limit="$2"
   load_worker_env "$name"
-  local url="http://${DAGENT_WORKER_HOST}:${DAGENT_WORKER_PORT}"
+  local url="http://$(local_worker_host):${DAGENT_WORKER_PORT}"
 
   curl -fsS -H "Authorization: Bearer $DAGENT_WORKER_API_TOKEN" "$url/v1/jobs?limit=$limit"
   echo
@@ -175,7 +188,7 @@ cmd_jobs() {
 cmd_metrics() {
   local name="$1"
   load_worker_env "$name"
-  local url="http://${DAGENT_WORKER_HOST}:${DAGENT_WORKER_PORT}"
+  local url="http://$(local_worker_host):${DAGENT_WORKER_PORT}"
 
   curl -fsS "$url/metrics"
 }
@@ -183,10 +196,7 @@ cmd_metrics() {
 cmd_dashboard() {
   local name="$1"
   load_worker_env "$name"
-  local url="http://${DAGENT_WORKER_HOST}:${DAGENT_WORKER_PORT}/ui"
-  if [[ "$DAGENT_WORKER_HOST" == "0.0.0.0" ]]; then
-    url="http://127.0.0.1:${DAGENT_WORKER_PORT}/ui"
-  fi
+  local url="http://$(local_worker_host):${DAGENT_WORKER_PORT}/ui"
   echo "Dashboard: $url"
   echo "Token: $DAGENT_WORKER_API_TOKEN"
 }
@@ -340,6 +350,52 @@ worker_port() {
   local name="$1"
   load_worker_env "$name" >/dev/null
   echo "$DAGENT_WORKER_PORT"
+}
+
+local_worker_host() {
+  if [[ "${DAGENT_WORKER_HOST:-127.0.0.1}" == "0.0.0.0" ]]; then
+    echo "127.0.0.1"
+  else
+    echo "${DAGENT_WORKER_HOST:-127.0.0.1}"
+  fi
+}
+
+default_config_path() {
+  local name="$1"
+  if [[ "$name" == "chatgpt" ]]; then
+    echo "$ROOT/worker/config.chatgpt.yml"
+  else
+    echo "$ROOT/worker/config.yml"
+  fi
+}
+
+default_config_example() {
+  local name="$1"
+  if [[ "$name" == "chatgpt" ]]; then
+    echo "$ROOT/worker/config.chatgpt.example.yml"
+  else
+    echo "$ROOT/worker/config.example.yml"
+  fi
+}
+
+ensure_config_file() {
+  local name="$1"
+  local config_path="$2"
+  if [[ -f "$config_path" ]]; then
+    return 0
+  fi
+
+  local example
+  example="$(default_config_example "$name")"
+  if [[ -f "$example" ]]; then
+    mkdir -p "$(dirname "$config_path")"
+    cp "$example" "$config_path"
+    echo "Created worker config from example: $config_path"
+    return 0
+  fi
+
+  echo "Worker config does not exist and no example was found: $config_path" >&2
+  exit 1
 }
 
 unit() {

@@ -198,6 +198,63 @@ def test_code_task_fails_when_agent_reports_blocked_result(tmp_path: Path) -> No
     store.close()
 
 
+def test_chatgpt_task_runs_without_repo_and_records_response(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    agent = tmp_path / "agent.py"
+    agent.write_text(
+        "\n".join(
+            [
+                "from pathlib import Path",
+                "import sys",
+                "workspace = Path(sys.argv[1])",
+                "(workspace / 'hello.txt').write_text('hi\\n', encoding='utf-8')",
+                "Path(sys.argv[2]).write_text('Created hello.txt\\n', encoding='utf-8')",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    store = JobStore(tmp_path / "jobs.sqlite3")
+    config = WorkerConfig(
+        data_dir=tmp_path / "worker",
+        notes_dir=tmp_path / "notes",
+        agent_workspace_dir=workspace,
+        agent_summaries_dir=tmp_path / "summaries",
+        auto_run_intents=frozenset({"chatgpt_task"}),
+        intent_tools={"chatgpt_task": "fake"},
+        tools={
+            "fake": CommandConfig(
+                name="fake",
+                command=(sys.executable, str(agent), "{workspace_path}", "{summary_path}"),
+                timeout_seconds=30,
+            )
+        },
+        notifications=NotificationConfig(),
+    )
+    record = store.create(
+        payload={
+            "intent": "chatgpt_task",
+            "task": "Create a hello file",
+        },
+        status="queued",
+        idempotency_key=None,
+        approval_hash=None,
+    )
+
+    JobRunner(config, store, Notifier(config.notifications)).run(record["id"])
+
+    final = store.get(record["id"])
+    assert final is not None
+    assert final["status"] == "succeeded"
+    result = final["result"]
+    assert result["kind"] == "chatgpt_task"
+    assert result["workspace_path"] == str(workspace)
+    assert result["last_message"] == "Created hello.txt\n"
+    assert (workspace / "hello.txt").read_text(encoding="utf-8") == "hi\n"
+
+    store.close()
+
+
 def _init_git_repo(path: Path) -> None:
     path.mkdir(parents=True)
     subprocess.run(["git", "init"], cwd=path, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

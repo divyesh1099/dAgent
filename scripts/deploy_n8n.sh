@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 
 ENV_FILE="docker/automation-stack/.env"
 EXAMPLE_FILE="docker/automation-stack/.env.example"
-HOSTNAME="${N8N_PUBLIC_HOSTNAME:-n8n.divyeshvishwakarma.com}"
+HOSTNAME="${N8N_PUBLIC_HOSTNAME:-localhost}"
 
 rand_hex() {
   openssl rand -hex "${1:-32}"
@@ -32,9 +32,9 @@ values = {
     "N8N_ENCRYPTION_KEY": encryption_key,
     "N8N_USER_MANAGEMENT_JWT_SECRET": jwt_secret,
     "N8N_HOST": hostname,
-    "N8N_PROTOCOL": "https",
-    "N8N_WEBHOOK_URL": f"https://{hostname}/",
-    "N8N_EDITOR_BASE_URL": f"https://{hostname}/",
+    "N8N_PROTOCOL": "http" if hostname in {"localhost", "127.0.0.1"} else "https",
+    "N8N_WEBHOOK_URL": (f"http://{hostname}:5678/" if hostname in {"localhost", "127.0.0.1"} else f"https://{hostname}/"),
+    "N8N_EDITOR_BASE_URL": (f"http://{hostname}:5678/" if hostname in {"localhost", "127.0.0.1"} else f"https://{hostname}/"),
     "DAGENT_WORKER_URL": "http://host.docker.internal:8765",
     "CLOUDFLARE_TUNNEL_TOKEN": "unused-existing-system-cloudflared-service",
 }

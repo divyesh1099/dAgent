@@ -292,6 +292,152 @@
       box-shadow: 0 1px 2px rgba(60, 64, 67, .08);
     }
 
+    .chatSurface {
+      display: grid;
+      gap: 16px;
+    }
+
+    .chatHeader {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 14px;
+    }
+
+    .chatHeader h1 {
+      margin: 0;
+      color: var(--ink);
+      font-size: 22px;
+      line-height: 1.2;
+    }
+
+    .message {
+      max-width: 820px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 14px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .message.markdown {
+      white-space: normal;
+    }
+
+    .message.markdown > :first-child {
+      margin-top: 0;
+    }
+
+    .message.markdown > :last-child {
+      margin-bottom: 0;
+    }
+
+    .message.markdown p,
+    .message.markdown ul,
+    .message.markdown ol,
+    .message.markdown blockquote,
+    .message.markdown pre,
+    .message.markdown table {
+      margin: 0 0 12px;
+    }
+
+    .message.markdown ul,
+    .message.markdown ol {
+      padding-left: 22px;
+    }
+
+    .message.markdown blockquote {
+      border-left: 3px solid #cbd5e1;
+      padding-left: 12px;
+      color: var(--muted);
+    }
+
+    .message.markdown table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .message.markdown th,
+    .message.markdown td {
+      border: 1px solid var(--line);
+      padding: 7px 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .message.markdown code {
+      border-radius: 6px;
+      background: #eef2f7;
+      padding: 2px 5px;
+      font-size: .92em;
+    }
+
+    .message.markdown pre code {
+      display: block;
+      background: transparent;
+      padding: 0;
+    }
+
+    .message.user {
+      justify-self: end;
+      background: var(--accent);
+      border-color: var(--accent);
+      color: white;
+    }
+
+    .message.assistant {
+      justify-self: start;
+      background: #f8fafc;
+      color: var(--text);
+    }
+
+    .message.errorMessage {
+      border-color: #f1b8b3;
+      background: #fff7f6;
+      color: var(--danger);
+    }
+
+    .activity {
+      display: grid;
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fbfcff;
+      padding: 14px;
+    }
+
+    .activityHead {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .pulse {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: var(--accent);
+      box-shadow: 0 0 0 0 rgba(26, 115, 232, .35);
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      70% { box-shadow: 0 0 0 9px rgba(26, 115, 232, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(26, 115, 232, 0); }
+    }
+
+    .activity pre {
+      max-height: 380px;
+      background: #0f172a;
+    }
+
     .panel h2 {
       margin: 0;
       color: var(--muted);
@@ -543,10 +689,13 @@
       jobId: "",
       job: null,
       doc: null,
-      saveTimer: null
+      saveTimer: null,
+      pollTimer: null,
+      logText: ""
     };
 
     const byId = (id) => document.getElementById(id);
+    const terminal = new Set(["succeeded", "failed", "rejected", "cancelled"]);
 
     function escapeHtml(value) {
       return String(value ?? "")
@@ -598,6 +747,11 @@
       node._timer = window.setTimeout(() => node.classList.remove("show"), 3000);
     }
 
+    function stopPolling() {
+      window.clearTimeout(state.pollTimer);
+      state.pollTimer = null;
+    }
+
     function formatTime(value) {
       if (!value) return "-";
       const date = new Date(value);
@@ -623,6 +777,7 @@
 
     async function load() {
       try {
+        stopPolling();
         state.job = await api(workerPath(""));
         byId("screenTitle").textContent = state.job.task_preview || state.job.intent;
         byId("screenMeta").textContent = `${state.worker} / ${state.job.intent} / ${state.job.status} / ${formatTime(state.job.created_at)}`;
@@ -635,6 +790,8 @@
     function renderIntentDetail() {
       if (state.job.intent === "capture_idea") {
         renderCaptureIdea();
+      } else if (state.job.intent === "chatgpt_task") {
+        renderChatGPTTask();
       } else {
         renderGenericJob();
       }
@@ -1279,14 +1436,36 @@
       const html = [];
       let inCode = false;
       let code = [];
-      let inList = false;
+      let listType = "";
       const closeList = () => {
-        if (inList) {
-          html.push("</ul>");
-          inList = false;
+        if (listType) {
+          html.push(`</${listType}>`);
+          listType = "";
         }
       };
-      for (const line of lines) {
+      const isTableSeparator = (line) => /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
+      const splitTableRow = (line) => line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+      const readTable = (start) => {
+        const headers = splitTableRow(lines[start]);
+        const rows = [];
+        let index = start + 2;
+        while (index < lines.length && lines[index].includes("|") && lines[index].trim()) {
+          rows.push(splitTableRow(lines[index]));
+          index += 1;
+        }
+        const head = headers.map((cell) => `<th>${inlineMarkdown(cell)}</th>`).join("");
+        const body = rows.map((row) => `<tr>${headers.map((_, cellIndex) => `<td>${inlineMarkdown(row[cellIndex] || "")}</td>`).join("")}</tr>`).join("");
+        html.push(`<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`);
+        return index;
+      };
+      const ensureList = (type) => {
+        if (listType === type) return;
+        closeList();
+        html.push(`<${type}>`);
+        listType = type;
+      };
+      for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index];
         const trimmed = line.trim();
         if (trimmed.startsWith("```")) {
           closeList();
@@ -1305,6 +1484,9 @@
         }
         if (!trimmed) {
           closeList();
+        } else if (index + 1 < lines.length && trimmed.includes("|") && isTableSeparator(lines[index + 1])) {
+          closeList();
+          index = readTable(index) - 1;
         } else if (trimmed.startsWith("### ")) {
           closeList();
           html.push(`<h3>${inlineMarkdown(trimmed.slice(4))}</h3>`);
@@ -1314,12 +1496,15 @@
         } else if (trimmed.startsWith("# ")) {
           closeList();
           html.push(`<h1>${inlineMarkdown(trimmed.slice(2))}</h1>`);
+        } else if (trimmed === "---" || trimmed === "***") {
+          closeList();
+          html.push("<hr>");
         } else if (trimmed.startsWith("- ")) {
-          if (!inList) {
-            html.push("<ul>");
-            inList = true;
-          }
+          ensureList("ul");
           html.push(`<li>${inlineMarkdown(trimmed.slice(2))}</li>`);
+        } else if (/^\d+\.\s+/.test(trimmed)) {
+          ensureList("ol");
+          html.push(`<li>${inlineMarkdown(trimmed.replace(/^\d+\.\s+/, ""))}</li>`);
         } else if (trimmed.startsWith("> ")) {
           closeList();
           html.push(`<blockquote>${inlineMarkdown(trimmed.slice(2))}</blockquote>`);
@@ -1339,6 +1524,7 @@
       value = value.replace(/`([^`]+)`/g, "<code>$1</code>");
       value = value.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
       value = value.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+      value = value.replace(/~~([^~]+)~~/g, "<s>$1</s>");
       return value;
     }
 
@@ -1377,6 +1563,260 @@
 
     function slugify(value) {
       return String(value || "idea").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || "idea";
+    }
+
+    async function renderChatGPTTask() {
+      const job = state.job;
+      byId("topActions").innerHTML = `
+        <button id="reload">Refresh</button>
+        <button id="notifyReply" class="primary">Notify</button>
+        <button id="retryRun">Retry</button>
+        <button id="stopRun" class="danger">Stop Run</button>
+        <button id="stopThread" class="danger">Stop Thread</button>
+        <button id="deleteThread" class="danger">Delete Thread</button>
+        <button id="rawLog">Raw log</button>
+      `;
+      byId("app").innerHTML = `
+        <div class="shell">
+          <section class="surface chatSurface">
+            <div class="chatHeader">
+              <div>
+                <h1>${escapeHtml(job.task_preview || "ChatGPT task")}</h1>
+                <span class="muted" id="chatMeta">${escapeHtml(chatMeta(job))}</span>
+              </div>
+              <div class="row" id="chatPills">${chatPills(job)}</div>
+            </div>
+            <div class="message user">${escapeHtml((job.payload && job.payload.task) || job.task_preview || "")}</div>
+            <div id="activityBlock" class="activity"></div>
+            <div id="assistantReply"></div>
+          </section>
+          <aside class="side">
+            <section class="panel">
+              <h2>Run</h2>
+              <div class="grid" id="chatFields"></div>
+            </section>
+            <section class="panel">
+              <h2>Workspace</h2>
+              <div id="workspaceInfo" class="muted">-</div>
+            </section>
+            <section class="panel">
+              <h2>Continue Thread</h2>
+              <textarea id="followupTask" rows="5" placeholder="Follow-up message"></textarea>
+              <button id="sendFollowup" class="primary">Send</button>
+            </section>
+          </aside>
+        </div>
+      `;
+      byId("reload").addEventListener("click", updateChatGPTTask);
+      byId("notifyReply").addEventListener("click", () => jobAction("notify"));
+      byId("retryRun").addEventListener("click", () => jobAction("retry"));
+      byId("stopRun").addEventListener("click", () => jobAction("cancel"));
+      byId("stopThread").addEventListener("click", stopChatThread);
+      byId("deleteThread").addEventListener("click", deleteChatThread);
+      byId("rawLog").addEventListener("click", showRawChatLog);
+      byId("sendFollowup").addEventListener("click", sendFollowupTask);
+      await updateChatGPTTask();
+    }
+
+    async function updateChatGPTTask() {
+      stopPolling();
+      try {
+        state.job = await api(workerPath(""));
+        byId("screenTitle").textContent = state.job.task_preview || "ChatGPT task";
+        byId("screenMeta").textContent = `${state.worker} / ${state.job.intent} / ${state.job.status} / ${formatTime(state.job.created_at)}`;
+        byId("chatMeta").textContent = chatMeta(state.job);
+        byId("chatPills").innerHTML = chatPills(state.job);
+        byId("chatFields").innerHTML = chatFields(state.job);
+        const result = state.job.result || {};
+        byId("workspaceInfo").textContent = result.workspace_path || (state.job.payload && state.job.payload.metadata && state.job.payload.metadata.workspace_path) || "-";
+        byId("stopRun").disabled = terminal.has(state.job.status);
+        byId("stopThread").disabled = false;
+        byId("deleteThread").disabled = !terminal.has(state.job.status);
+        byId("rawLog").disabled = !state.job.log_path;
+        state.logText = await api(workerPath("/log?tail=160000"), {text: true}).catch(() => "");
+        byId("activityBlock").innerHTML = chatActivityHtml(state.job, state.logText);
+        byId("assistantReply").innerHTML = chatReplyHtml(state.job);
+        const activityPre = byId("activityLog");
+        if (activityPre && !terminal.has(state.job.status)) activityPre.scrollTop = activityPre.scrollHeight;
+        if (!terminal.has(state.job.status)) {
+          state.pollTimer = window.setTimeout(updateChatGPTTask, 1800);
+        }
+      } catch (error) {
+        const block = byId("activityBlock");
+        if (block) block.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    function chatMeta(job) {
+      return `${job.worker || state.worker} / ${job.status} / ${formatTime(job.created_at)}`;
+    }
+
+    function chatPills(job) {
+      const pills = [
+        `<span class="pill ${escapeHtml(job.status)}">${escapeHtml(job.status)}</span>`,
+        `<span class="pill">${escapeHtml(job.intent)}</span>`,
+        `<span class="pill">${escapeHtml(job.input_type || "-")}</span>`
+      ];
+      if (continuationOf(job) !== "-") {
+        pills.push('<span class="pill">continued</span>');
+      }
+      return pills.join("");
+    }
+
+    function chatFields(job) {
+      return [
+        ["Created", formatTime(job.created_at)],
+        ["Started", formatTime(job.started_at)],
+        ["Finished", formatTime(job.finished_at)],
+        ["Job", job.id],
+        ["Thread", chatThreadId(job)],
+        ["Continued From", continuationOf(job)],
+        ["Source", job.source || "-"],
+        ["Worker", job.worker || state.worker]
+      ].map(([label, value]) => `<div class="field"><span>${escapeHtml(label)}</span><b>${escapeHtml(value || "-")}</b></div>`).join("");
+    }
+
+    function chatThreadId(job) {
+      const result = job.result || {};
+      const metadata = (job.payload && job.payload.metadata) || {};
+      return result.thread_id || result.session_id || result.resume_session_id || metadata.thread_id || metadata.resume_session_id || "-";
+    }
+
+    function continuationOf(job) {
+      const result = job.result || {};
+      const metadata = (job.payload && job.payload.metadata) || {};
+      return result.continuation_of || metadata.continuation_of || metadata.parent_job_id || "-";
+    }
+
+    function chatActivityHtml(job, logText) {
+      const waiting = !terminal.has(job.status);
+      const label = waiting ? "Working" : "Activity";
+      return `
+        <div class="activityHead">
+          <div class="row">${waiting ? '<span class="pulse"></span>' : ""}<strong>${label}</strong></div>
+          <span class="muted">${escapeHtml(formatTime(job.updated_at))}</span>
+        </div>
+        <pre id="activityLog">${escapeHtml(cleanChatLog(logText) || "Waiting for the worker to start.")}</pre>
+      `;
+    }
+
+    function chatReplyHtml(job) {
+      const result = job.result || {};
+      const reply = String(result.last_message || "").trim();
+      if (reply) {
+        return `<div class="message assistant markdown">${markdownToHtml(reply)}</div>`;
+      }
+      if (job.error) {
+        return `<div class="message errorMessage">${escapeHtml(job.error)}</div>`;
+      }
+      if (!terminal.has(job.status)) {
+        return '<div class="message assistant">Waiting for the reply...</div>';
+      }
+      return '<div class="message assistant">No reply was captured for this run.</div>';
+    }
+
+    function cleanChatLog(logText) {
+      const lines = String(logText || "").split(/\r?\n/);
+      const cleaned = [];
+      let skippingPrompt = false;
+      for (const line of lines) {
+        if (line.startsWith("$ codex ")) {
+          cleaned.push("$ codex exec ...");
+          skippingPrompt = true;
+          continue;
+        }
+        if (line === "user") {
+          skippingPrompt = true;
+          continue;
+        }
+        if (skippingPrompt) {
+          if (line === "exec" || line === "codex" || line.startsWith("apply patch") || line.startsWith("cwd: ") || line.startsWith("[stderr]") || line.startsWith("OpenAI Codex") || line.startsWith("Reading additional input")) {
+            skippingPrompt = false;
+          } else {
+            continue;
+          }
+        }
+        if (line.startsWith("tokens used")) continue;
+        cleaned.push(line);
+      }
+      return cleaned.slice(-220).join("\n").trim();
+    }
+
+    async function showRawChatLog() {
+      state.logText = await api(workerPath("/log?tail=200000"), {text: true});
+      byId("activityBlock").innerHTML = `
+        <div class="activityHead">
+          <strong>Raw log</strong>
+          <button id="backToActivity">Activity</button>
+        </div>
+        <pre id="activityLog">${escapeHtml(state.logText || "No log yet.")}</pre>
+      `;
+      byId("backToActivity").addEventListener("click", updateChatGPTTask);
+    }
+
+    async function jobAction(name) {
+      try {
+        const response = await api(workerPath(`/${name}`), {method: "POST", body: {}});
+        toast(name === "notify" ? "Notification sent." : "Run updated.");
+        if (name === "retry" && response && response.id) {
+          state.jobId = response.id;
+        }
+        await updateChatGPTTask();
+      } catch (error) {
+        toast(error.message);
+      }
+    }
+
+    async function stopChatThread() {
+      if (!window.confirm("Stop every active run in this ChatGPT thread?")) return;
+      try {
+        const response = await api(workerPath("/thread/cancel"), {method: "POST", body: {}});
+        const count = response.cancelled ? response.cancelled.length : 0;
+        toast(count ? `Stopped ${count} run${count === 1 ? "" : "s"}.` : "Thread already stopped.");
+        await updateChatGPTTask();
+      } catch (error) {
+        toast(error.message);
+      }
+    }
+
+    async function deleteChatThread() {
+      if (!terminal.has(state.job.status)) {
+        toast("Stop the thread before deleting it.");
+        return;
+      }
+      const thread = chatThreadId(state.job);
+      const label = thread === "-" ? state.job.id : thread;
+      if (!window.confirm(`Delete this ChatGPT thread from dAgent?\n\n${label}`)) return;
+      try {
+        const response = await api(workerPath("/thread"), {method: "DELETE"});
+        const count = response.deleted ? response.deleted.length : 0;
+        toast(`Deleted ${count || 1} run${count === 1 ? "" : "s"}.`);
+        location.assign(`/ui#token=${encodeURIComponent(state.token)}`);
+      } catch (error) {
+        toast(error.message);
+      }
+    }
+
+    async function sendFollowupTask() {
+      const task = byId("followupTask").value.trim();
+      if (!task) {
+        toast("Enter a follow-up.");
+        return;
+      }
+      try {
+        const response = await api(workerPath("/continue"), {
+          method: "POST",
+          body: {task}
+        });
+        if (response && response.id) {
+          state.jobId = response.id;
+          history.replaceState(null, "", `/ui/detail#token=${encodeURIComponent(state.token)}&worker=${encodeURIComponent(state.worker)}&job=${encodeURIComponent(state.jobId)}`);
+          byId("followupTask").value = "";
+          await load();
+        }
+      } catch (error) {
+        toast(error.message);
+      }
     }
 
     async function renderGenericJob() {

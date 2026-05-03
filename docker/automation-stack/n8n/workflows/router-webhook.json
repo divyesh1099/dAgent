@@ -1,6 +1,6 @@
 {
   "name": "dAgent Watch Capture Router",
-  "id": "f6f7257e-9d53-4e8c-a982-ecc90976f167",
+  "id": "ipfYO3yQVtfYmzTS",
   "active": true,
   "nodes": [
     {
@@ -22,7 +22,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const input = $input.first().json;\nconst headers = input.headers || {};\nconst body = input.body || {};\nconst env = typeof $env !== 'undefined' ? $env : {};\n\nfunction header(name) {\n  const wanted = name.toLowerCase();\n  for (const [key, value] of Object.entries(headers)) {\n    if (key.toLowerCase() === wanted) return value;\n  }\n  return undefined;\n}\n\nconst expectedSecret = env.DAGENT_SHORTCUT_SECRET || '';\nconst providedSecret = header('x-dagent-shortcut-secret') || '';\nif (!expectedSecret || providedSecret !== expectedSecret) {\n  throw new Error('invalid shortcut secret');\n}\n\nconst requestId = header('cf-ray') || header('x-request-id') || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;\nconst idempotencyKey = `watch-${$execution.id}-${requestId}`.slice(0, 160);\nconst payload = {...body};\n\nif (!payload.intent && !payload.action && (payload.task || payload.text || payload.idea)) {\n  payload.intent = 'capture_idea';\n}\nif (!payload.task && (payload.text || payload.idea)) {\n  payload.task = payload.text || payload.idea;\n}\nif (!payload.source) {\n  payload.source = 'apple_watch';\n}\nif (payload.task && !payload.input_type) {\n  payload.input_type = 'voice';\n}\nif (payload.task && !payload.idempotency_key) {\n  payload.idempotency_key = idempotencyKey;\n}\n\nreturn [{ json: { payload, idempotency_key: payload.idempotency_key || idempotencyKey } }];"
+        "jsCode": "const input = $input.first().json;\nconst headers = input.headers || {};\nconst body = input.body || {};\nconst env = typeof $env !== 'undefined' ? $env : {};\n\nfunction header(name) {\n  const wanted = name.toLowerCase();\n  for (const [key, value] of Object.entries(headers)) {\n    if (key.toLowerCase() === wanted) return value;\n  }\n  return undefined;\n}\n\nconst expectedSecret = env.DAGENT_SHORTCUT_SECRET || '';\nconst providedSecret = header('x-dagent-shortcut-secret') || '';\nif (!expectedSecret || providedSecret !== expectedSecret) {\n  throw new Error('invalid shortcut secret');\n}\n\nconst requestId = header('cf-ray') || header('x-request-id') || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;\nconst idempotencyKey = `watch-${$execution.id}-${requestId}`.slice(0, 160);\nconst payload = {...body};\n\nif (!payload.intent && !payload.action && (payload.task || payload.text || payload.idea || payload.message || payload.Task)) {\n  payload.intent = 'capture_idea';\n}\nif (!payload.task && (payload.text || payload.idea || payload.message || payload.Task)) {\n  payload.task = payload.text || payload.idea || payload.message || payload.Task;\n}\nif (!payload.source) {\n  payload.source = 'apple_watch';\n}\nif (payload.task && !payload.input_type) {\n  payload.input_type = 'voice';\n}\nif (payload.task && !payload.idempotency_key) {\n  payload.idempotency_key = idempotencyKey;\n}\n\npayload.wait_seconds = 0;\n\nreturn [{ json: { payload, idempotency_key: payload.idempotency_key || idempotencyKey } }];"
       },
       "id": "420f3c76-934a-44a6-b91f-5f6b2d02aca8",
       "name": "Normalize Request",
@@ -36,13 +36,13 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ ($env.DAGENT_WORKER_URL || 'http://host.docker.internal:8765').replace(/\\/$/, '') + '/v1/shortcut' }}",
+        "url": "={{ ([\"chat\", \"chatgpt\", \"assistant\", \"assistant_task\", \"chatgpt_task\"].includes(String($json.payload.intent || '').toLowerCase()) ? ($env.DAGENT_CHATGPT_WORKER_URL || 'http://host.docker.internal:8767') : ($env.DAGENT_WORKER_URL || 'http://host.docker.internal:8765')).replace(/\\/$/, '') + '/v1/shortcut' }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "Authorization",
-              "value": "={{ 'Bearer ' + $env.DAGENT_WORKER_API_TOKEN }}"
+              "value": "={{ 'Bearer ' + ([\"chat\", \"chatgpt\", \"assistant\", \"assistant_task\", \"chatgpt_task\"].includes(String($json.payload.intent || '').toLowerCase()) ? ($env.DAGENT_CHATGPT_WORKER_API_TOKEN || $env.DAGENT_WORKER_API_TOKEN) : $env.DAGENT_WORKER_API_TOKEN) }}"
             },
             {
               "name": "Content-Type",
@@ -59,7 +59,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ $json.payload }}",
         "options": {
-          "timeout": 30000
+          "timeout": 120000
         }
       },
       "id": "f078c803-3989-4429-9ecb-54c24d70bc30",
@@ -68,6 +68,19 @@
       "typeVersion": 4.4,
       "position": [
         220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const job = $input.first().json || {};\nconst result = job.result || {};\nlet reply = String(result.last_message || job.error || '').trim();\n\nif (!reply) {\n  if (job.status === 'running' || job.status === 'queued') {\n    reply = `Task started. Job ${job.id || ''}`.trim();\n  } else if (job.status) {\n    reply = String(job.status);\n  } else {\n    reply = 'Request received.';\n  }\n}\n\nif (reply.length > 3500) {\n  reply = `${reply.slice(0, 3500)}\\n...[truncated]`;\n}\n\nreturn [{\n  json: {\n    ok: !job.error && job.status !== 'failed',\n    status: job.status || 'unknown',\n    reply,\n    message: reply,\n    job_id: job.id || null,\n    worker: job.worker || null,\n    intent: job.intent || null,\n    code_server_url: result.code_server_url || null,\n    workspace_path: result.workspace_path || null,\n  },\n}];"
+      },
+      "id": "23c3d140-0e54-43be-9d15-ffadf5782ca1",
+      "name": "Shortcut Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
         0
       ]
     }
@@ -94,6 +107,17 @@
           }
         ]
       ]
+    },
+    "Submit Worker Job": {
+      "main": [
+        [
+          {
+            "node": "Shortcut Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {
@@ -101,7 +125,7 @@
   },
   "staticData": null,
   "pinData": {},
-  "versionId": "1c8a33a5-81e1-4b57-a9d0-0e46a6dfd121",
+  "versionId": "4cb0e65e-7b4b-43e7-9322-d56764990857",
   "meta": {
     "templateCredsSetupCompleted": true
   },

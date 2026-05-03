@@ -95,6 +95,14 @@ class JobStore:
             ).fetchall()
         return [_row_to_dict(row) for row in rows]
 
+    def list_by_intent(self, intent: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM jobs WHERE intent = ? ORDER BY created_at DESC",
+                (intent,),
+            ).fetchall()
+        return [_row_to_dict(row) for row in rows]
+
     def metric_snapshot(self) -> dict[str, Any]:
         with self._lock:
             total_row = self._conn.execute("SELECT COUNT(*) AS count FROM jobs").fetchone()

@@ -24,6 +24,7 @@ scripts/n8nctl watch-env
 This adds these values to `docker/automation-stack/.env` and recreates n8n:
 
 - `DAGENT_WORKER_API_TOKEN`
+- `DAGENT_CHATGPT_WORKER_API_TOKEN`
 - `DAGENT_SHORTCUT_SECRET`
 
 Use `DAGENT_SHORTCUT_SECRET` in the Apple Shortcut header:
@@ -31,6 +32,15 @@ Use `DAGENT_SHORTCUT_SECRET` in the Apple Shortcut header:
 ```bash
 grep '^DAGENT_SHORTCUT_SECRET=' docker/automation-stack/.env
 ```
+
+Import or re-import the checked-in router workflow:
+
+```bash
+scripts/n8nctl import-workflows
+```
+
+The workflow export uses environment variables for all worker URLs and tokens,
+so no secrets need to be stored in the workflow JSON.
 
 ## Code Task Smoke Test
 

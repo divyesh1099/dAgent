@@ -43,10 +43,29 @@ Not allowed:
 
 ## Quick Start
 
+For a fresh clone that should recreate the full local setup:
+
+```bash
+scripts/bootstrap_dagent.sh
+```
+
+Use a public n8n hostname when needed:
+
+```bash
+N8N_PUBLIC_HOSTNAME=n8n.your-domain.example scripts/bootstrap_dagent.sh
+```
+
+The bootstrap creates both workers (`main` and `chatgpt`), generates local
+secrets, starts the Docker stack, imports the checked-in n8n router workflow,
+and installs startup services. It keeps secrets in ignored local files.
+
+Manual setup is still available:
+
 1. Install/start the default worker as a service:
 
 ```bash
 scripts/dagentctl up main 8765
+scripts/dagentctl up chatgpt 8767
 scripts/dagentctl boot
 ```
 
@@ -54,6 +73,7 @@ scripts/dagentctl boot
 
 ```bash
 scripts/dagentctl token main
+scripts/dagentctl token chatgpt
 ```
 
 3. Create automation secrets for n8n/Shortcuts:
@@ -67,6 +87,7 @@ scripts/dagentctl token main
 ```bash
 scripts/deploy_n8n.sh
 scripts/n8nctl startup
+scripts/n8nctl import-workflows
 ```
 
 5. Configure the worker:
@@ -139,5 +160,6 @@ Then add more specialized flows once the basics are boring and dependable.
 - [GitHub Accounts](docs/github-accounts.md)
 - [Operations](docs/operations.md)
 - [Worker Service](docs/worker-service.md)
+- [Reproducible Setup](docs/reproducible-setup.md)
 - [dLogs Integration](docs/dlogs-integration.md)
 - [References](docs/references.md)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
+import asyncio
 import html
 import json
 import os
@@ -27,6 +28,7 @@ from .projects import Project, ProjectError, add_project, approve_project, list_
 from .runner import JobRunner
 from .schemas import (
     ApprovalRequest,
+    JobContinueRequest,
     JobRequest,
     JobRequeueRequest,
     JobResponse,
@@ -35,6 +37,7 @@ from .schemas import (
     ProjectListResponse,
     ProjectResponse,
     ReadyResponse,
+    Source,
 )
 from .security import bearer_token_matches, hash_secret, make_approval_code, verify_body_signature, verify_secret
 
@@ -48,6 +51,14 @@ SHARE_VISIBILITIES = {"private", "public"}
 INLINE_DATA_ATTACHMENT_LINK_RE = re.compile(
     r"<a\b[^>]*\bhref\s*=\s*([\"'])data:(?:application/(?:pdf|vnd\.|msword|octet-stream)|text/(?:csv|plain|markdown))[^\"']*\1[^>]*>(.*?)</a>",
     flags=re.IGNORECASE | re.DOTALL,
+)
+CODEX_SESSION_ID_RE = re.compile(
+    r"\bsession id:\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b",
+    flags=re.IGNORECASE,
+)
+UUID_RE = re.compile(
+    r"\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b",
+    flags=re.IGNORECASE,
 )
 
 
@@ -278,12 +289,23 @@ async def shortcut_dispatch(
             raise HTTPException(status_code=400, detail="job_id is required")
         return _approve_job_response(request.app, job_id, approval).model_dump(mode="json")
 
+    job_body = _shortcut_job_body(body)
+    if not _shortcut_task_text(job_body):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "task is required. In Apple Shortcuts, set the JSON dictionary key "
+                "'task' to the Task variable, or send 'text'/'message'."
+            ),
+        )
     try:
-        payload = JobRequest.model_validate(_shortcut_job_body(body))
+        payload = JobRequest.model_validate(job_body)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
     idempotency_key = payload.idempotency_key or request.headers.get("Idempotency-Key")
-    return _create_job_response(request.app, payload, idempotency_key=idempotency_key).model_dump(mode="json")
+    response = _create_job_response(request.app, payload, idempotency_key=idempotency_key)
+    response = await _wait_for_shortcut_job(request.app, response, wait_seconds=_shortcut_wait_seconds(body, payload))
+    return response.model_dump(mode="json")
 
 
 @app.post("/v1/jobs", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -420,6 +442,11 @@ def cancel_job(job_id: str, request: Request, _auth: None = Depends(require_auth
     return _response(cancelled, worker_name=request.app.state.worker_name)
 
 
+@app.post("/v1/jobs/{job_id}/thread/cancel")
+def cancel_chatgpt_thread(job_id: str, request: Request, _auth: None = Depends(require_auth_sync)) -> dict[str, Any]:
+    return _cancel_chatgpt_thread_response(request.app, job_id)
+
+
 @app.post("/v1/jobs/{job_id}/retry", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
 def retry_job(job_id: str, request: Request, _auth: None = Depends(require_auth_sync)) -> JobResponse:
     store: JobStore = request.app.state.store
@@ -455,6 +482,16 @@ def requeue_job(
     return _enqueue_job(request.app, payload, idempotency_key=_derived_idempotency_key("edit", job_id))
 
 
+@app.post("/v1/jobs/{job_id}/continue", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
+def continue_job(
+    job_id: str,
+    body: JobContinueRequest,
+    request: Request,
+    _auth: None = Depends(require_auth_sync),
+) -> JobResponse:
+    return _continue_job_response(request.app, job_id, body)
+
+
 @app.post("/v1/jobs/{job_id}/notify")
 def notify_job(job_id: str, request: Request, _auth: None = Depends(require_auth_sync)) -> dict[str, Any]:
     store: JobStore = request.app.state.store
@@ -467,6 +504,11 @@ def notify_job(job_id: str, request: Request, _auth: None = Depends(require_auth
         "job": _response(record, worker_name=request.app.state.worker_name).model_dump(mode="json"),
         "notifications": notifier.job_finished(record),
     }
+
+
+@app.delete("/v1/jobs/{job_id}/thread")
+def delete_chatgpt_thread(job_id: str, request: Request, _auth: None = Depends(require_auth_sync)) -> dict[str, Any]:
+    return _delete_chatgpt_thread_response(request.app, job_id)
 
 
 @app.delete("/v1/jobs/{job_id}")
@@ -597,6 +639,12 @@ def dashboard_worker_cancel(worker_name: str, job_id: str, request: Request, _au
     return _worker_request_json(worker, "POST", f"/v1/jobs/{quote(job_id)}/cancel", {})
 
 
+@app.post("/v1/dashboard/workers/{worker_name}/jobs/{job_id}/thread/cancel")
+def dashboard_worker_cancel_thread(worker_name: str, job_id: str, request: Request, _auth: None = Depends(require_auth_sync)) -> dict[str, Any]:
+    worker = _find_worker(request.app, worker_name)
+    return _worker_request_json(worker, "POST", f"/v1/jobs/{quote(job_id)}/thread/cancel", {})
+
+
 @app.post("/v1/dashboard/workers/{worker_name}/jobs/{job_id}/retry")
 def dashboard_worker_retry(worker_name: str, job_id: str, request: Request, _auth: None = Depends(require_auth_sync)) -> dict[str, Any]:
     worker = _find_worker(request.app, worker_name)
@@ -615,6 +663,18 @@ def dashboard_worker_requeue(
     return _worker_request_json(worker, "POST", f"/v1/jobs/{quote(job_id)}/requeue", body)
 
 
+@app.post("/v1/dashboard/workers/{worker_name}/jobs/{job_id}/continue")
+def dashboard_worker_continue(
+    worker_name: str,
+    job_id: str,
+    request: Request,
+    body: dict[str, Any] = Body(default_factory=dict),
+    _auth: None = Depends(require_auth_sync),
+) -> dict[str, Any]:
+    worker = _find_worker(request.app, worker_name)
+    return _worker_request_json(worker, "POST", f"/v1/jobs/{quote(job_id)}/continue", body)
+
+
 @app.post("/v1/dashboard/workers/{worker_name}/jobs/{job_id}/notify")
 def dashboard_worker_notify(worker_name: str, job_id: str, request: Request, _auth: None = Depends(require_auth_sync)) -> dict[str, Any]:
     worker = _find_worker(request.app, worker_name)
@@ -625,6 +685,12 @@ def dashboard_worker_notify(worker_name: str, job_id: str, request: Request, _au
 def dashboard_worker_delete(worker_name: str, job_id: str, request: Request, _auth: None = Depends(require_auth_sync)) -> dict[str, Any]:
     worker = _find_worker(request.app, worker_name)
     return _worker_request_json(worker, "DELETE", f"/v1/jobs/{quote(job_id)}")
+
+
+@app.delete("/v1/dashboard/workers/{worker_name}/jobs/{job_id}/thread")
+def dashboard_worker_delete_thread(worker_name: str, job_id: str, request: Request, _auth: None = Depends(require_auth_sync)) -> dict[str, Any]:
+    worker = _find_worker(request.app, worker_name)
+    return _worker_request_json(worker, "DELETE", f"/v1/jobs/{quote(job_id)}/thread")
 
 
 @app.post("/v1/jobs/{job_id}/approval", response_model=JobResponse)
@@ -755,12 +821,185 @@ def _approve_job_response(app_: FastAPI, job_id: str, approval: ApprovalRequest)
     return _response(queued, worker_name=app_.state.worker_name)
 
 
+def _continue_job_response(app_: FastAPI, job_id: str, body: JobContinueRequest) -> JobResponse:
+    store: JobStore = app_.state.store
+    config: WorkerConfig = app_.state.config
+    record = store.get(job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if record.get("intent") != "chatgpt_task":
+        raise HTTPException(status_code=409, detail="only chatgpt_task jobs can be continued")
+
+    session_id = _job_thread_session_id(record, config)
+    if not session_id:
+        raise HTTPException(status_code=409, detail="job does not have a resumable Codex session yet")
+
+    base = dict(record["payload"])
+    metadata = base.get("metadata") if isinstance(base.get("metadata"), dict) else {}
+    metadata = dict(metadata)
+    metadata.update(
+        {
+            "resume_session_id": session_id,
+            "thread_id": session_id,
+            "continuation_of": job_id,
+            "parent_job_id": job_id,
+        }
+    )
+
+    base.update(
+        {
+            "intent": "chatgpt_task",
+            "task": body.task,
+            "repo": None,
+            "source": "api",
+            "input_type": "text",
+            "idempotency_key": None,
+            "metadata": metadata,
+        }
+    )
+    if base.get("tool") and base["tool"] not in config.tools:
+        base["tool"] = None
+
+    payload = JobRequest.model_validate(base)
+    return _enqueue_job(app_, payload, idempotency_key=_derived_idempotency_key("continue", job_id))
+
+
+def _cancel_chatgpt_thread_response(app_: FastAPI, job_id: str) -> dict[str, Any]:
+    store: JobStore = app_.state.store
+    runner: JobRunner = app_.state.runner
+    config: WorkerConfig = app_.state.config
+    record = store.get(job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    thread_id, records = _chatgpt_thread_records(store, config, record)
+    cancelled: list[str] = []
+    already_terminal: list[str] = []
+    for item in records:
+        if item["status"] in _TERMINAL_STATUSES:
+            already_terminal.append(str(item["id"]))
+            continue
+        runner.cancel(str(item["id"]))
+        store.set_status(str(item["id"]), JobStatus.cancelled.value, error="thread cancel requested")
+        cancelled.append(str(item["id"]))
+
+    return {
+        "ok": True,
+        "action": "cancel_thread",
+        "thread_id": thread_id,
+        "job_ids": [str(item["id"]) for item in records],
+        "cancelled": cancelled,
+        "already_terminal": already_terminal,
+        "worker": app_.state.worker_name,
+    }
+
+
+def _delete_chatgpt_thread_response(app_: FastAPI, job_id: str) -> dict[str, Any]:
+    store: JobStore = app_.state.store
+    config: WorkerConfig = app_.state.config
+    record = store.get(job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    thread_id, records = _chatgpt_thread_records(store, config, record)
+    active = [str(item["id"]) for item in records if item["status"] not in _TERMINAL_STATUSES]
+    if active:
+        raise HTTPException(status_code=409, detail=f"thread has active jobs; stop it before deleting: {', '.join(active)}")
+
+    deleted: list[str] = []
+    log_deleted: list[str] = []
+    summary_deleted: list[str] = []
+    for item in records:
+        if _delete_job_log(item, config):
+            log_deleted.append(str(item["id"]))
+        if _delete_chatgpt_summary(item, config):
+            summary_deleted.append(str(item["id"]))
+        if store.delete(str(item["id"])):
+            deleted.append(str(item["id"]))
+
+    return {
+        "ok": True,
+        "action": "delete_thread",
+        "thread_id": thread_id,
+        "deleted": deleted,
+        "log_deleted": log_deleted,
+        "summary_deleted": summary_deleted,
+        "worker": app_.state.worker_name,
+    }
+
+
+def _chatgpt_thread_records(
+    store: JobStore,
+    config: WorkerConfig,
+    record: dict[str, Any],
+) -> tuple[str, list[dict[str, Any]]]:
+    if record.get("intent") != "chatgpt_task":
+        raise HTTPException(status_code=409, detail="only chatgpt_task threads can be managed")
+
+    thread_id = _job_thread_session_id(record, config)
+    if not thread_id:
+        return "", [record]
+
+    records: dict[str, dict[str, Any]] = {str(record["id"]): record}
+    for candidate in store.list_by_intent("chatgpt_task"):
+        candidate_thread_id = _job_thread_session_id(candidate, config)
+        if candidate_thread_id == thread_id:
+            records[str(candidate["id"])] = candidate
+
+    return thread_id, sorted(records.values(), key=lambda item: str(item.get("created_at") or ""))
+
+
+def _job_thread_session_id(record: dict[str, Any], config: WorkerConfig) -> str:
+    result = record.get("result") if isinstance(record.get("result"), dict) else {}
+    payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+
+    for source in (result, metadata):
+        for key in ("thread_id", "session_id", "resume_session_id", "codex_session_id", "chat_session_id"):
+            session_id = _session_id_from_value(source.get(key))
+            if session_id:
+                return session_id
+
+    for key in ("stderr_tail", "stdout_tail", "last_message"):
+        session_id = _session_id_from_text(str(result.get(key) or ""))
+        if session_id:
+            return session_id
+
+    log_path = record.get("log_path")
+    if log_path:
+        root = (config.data_dir / "logs").resolve()
+        path = Path(str(log_path)).expanduser().resolve()
+        if _is_relative_to(path, root):
+            session_id = _session_id_from_text(_read_tail(path, 200000))
+            if session_id:
+                return session_id
+
+    return ""
+
+
+def _session_id_from_value(value: Any) -> str:
+    if value is None or isinstance(value, (dict, list, tuple, set)):
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    exact = UUID_RE.fullmatch(text)
+    if exact:
+        return exact.group(1).lower()
+    return _session_id_from_text(text)
+
+
+def _session_id_from_text(text: str) -> str:
+    match = CODEX_SESSION_ID_RE.search(text)
+    return match.group(1).lower() if match else ""
+
+
 def _shortcut_action(body: dict[str, Any]) -> str:
     action = body.get("action") or body.get("intent") or ""
     action = str(action).strip().lower()
     if action:
         return action
-    return "capture_idea" if body.get("task") or body.get("text") or body.get("idea") else ""
+    return "capture_idea" if _shortcut_task_text(body) else ""
 
 
 def _normalize_shortcut_body(body: dict[str, Any]) -> dict[str, Any]:
@@ -783,24 +1022,15 @@ def _shortcut_job_body(body: dict[str, Any]) -> dict[str, Any]:
     payload = {
         key: value
         for key, value in body.items()
-        if key
-        not in {
-            "action",
-            "create_if_missing",
-            "idea",
-            "include_new",
-            "name",
-            "path",
-            "project",
-            "scan",
-            "text",
-            "Body",
-        }
+        if key in _JOB_PAYLOAD_KEYS
     }
     if not payload.get("intent"):
         payload["intent"] = "capture_idea"
-    if not payload.get("task"):
-        payload["task"] = body.get("text") or body.get("idea")
+    if str(payload.get("intent") or "").strip().lower() in {"chat", "chatgpt", "assistant", "assistant_task"}:
+        payload["intent"] = "chatgpt_task"
+    task = _shortcut_task_text(body)
+    if task:
+        payload["task"] = task
     if body.get("project") and not payload.get("repo"):
         payload["repo"] = body["project"]
     if not payload.get("source"):
@@ -822,6 +1052,83 @@ def _shortcut_job_body(body: dict[str, Any]) -> dict[str, Any]:
     if metadata:
         payload["metadata"] = metadata
     return payload
+
+
+_JOB_PAYLOAD_KEYS = {
+    "intent",
+    "task",
+    "repo",
+    "tool",
+    "source",
+    "input_type",
+    "files",
+    "priority",
+    "require_approval",
+    "idempotency_key",
+    "dry_run",
+    "metadata",
+}
+
+_SHORTCUT_TASK_KEYS = (
+    "task",
+    "Task",
+    "text",
+    "Text",
+    "idea",
+    "Idea",
+    "prompt",
+    "Prompt",
+    "message",
+    "Message",
+    "input",
+    "Input",
+    "provided_input",
+    "Provided Input",
+    "dictated_text",
+    "Dictated Text",
+)
+
+
+def _shortcut_task_text(body: dict[str, Any]) -> str | None:
+    for key in _SHORTCUT_TASK_KEYS:
+        value = body.get(key)
+        if value is None:
+            continue
+        if isinstance(value, (dict, list, tuple, set)):
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _shortcut_wait_seconds(body: dict[str, Any], payload: JobRequest) -> float:
+    value = body.get("wait_seconds")
+    if value is None and payload.intent == "chatgpt_task" and payload.source in {Source.apple_watch, Source.ios}:
+        return 0.0
+    if value is None and payload.intent == "chatgpt_task":
+        return 20.0
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(seconds, 110.0))
+
+
+async def _wait_for_shortcut_job(app_: FastAPI, response: JobResponse, *, wait_seconds: float) -> JobResponse:
+    if wait_seconds <= 0 or response.status in {JobStatus.approval_required, JobStatus.rejected, JobStatus.cancelled}:
+        return response
+    store: JobStore = app_.state.store
+    deadline = time.monotonic() + wait_seconds
+    latest = response
+    while time.monotonic() < deadline:
+        record = store.get(response.id)
+        if record is not None:
+            latest = _response(record, worker_name=app_.state.worker_name)
+            if latest.status.value in _TERMINAL_STATUSES:
+                return latest
+        await asyncio.sleep(0.5)
+    return latest
 
 
 def _metadata_value(body: dict[str, Any], key: str) -> Any:
@@ -1047,6 +1354,22 @@ def _delete_job_log(record: dict[str, Any], config: WorkerConfig) -> bool:
     path = Path(str(log_path)).expanduser().resolve()
     if not _is_relative_to(path, root):
         raise HTTPException(status_code=403, detail="log path is outside worker log directory")
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _delete_chatgpt_summary(record: dict[str, Any], config: WorkerConfig) -> bool:
+    result = record.get("result") if isinstance(record.get("result"), dict) else {}
+    summary_path = result.get("summary_path")
+    if not summary_path:
+        return False
+    root = (config.agent_summaries_dir or (config.data_dir / "chatgpt-summaries")).resolve()
+    path = Path(str(summary_path)).expanduser().resolve()
+    if not _is_relative_to(path, root):
+        raise HTTPException(status_code=403, detail="summary path is outside worker summary directory")
     try:
         path.unlink()
     except FileNotFoundError:

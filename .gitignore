@@ -12,6 +12,7 @@ __pycache__/
 
 .data/
 worker/config.yml
+worker/config.chatgpt.yml
 docker/automation-stack/.env
 
 logs/

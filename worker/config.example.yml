@@ -1,9 +1,12 @@
 # Copy to worker/config.yml and edit for your workstation.
+#
+# Relative paths are resolved from the repo root when this file lives in
+# worker/config.yml, so this example works after cloning the repo anywhere.
 
 data_dir: .data/worker
 notes_dir: .data/notes
 trusted_roots:
-  - /home/divyesh-nandlal-vishwakarma/Desktop/Divyesh
+  - .
 auto_approve_trusted_projects: true
 code:
   worktrees_dir: .data/code-worktrees
@@ -43,7 +46,7 @@ intent_tools:
 
 repos:
   dagent:
-    path: /home/divyesh-nandlal-vishwakarma/Desktop/Divyesh/dAgent
+    path: .
     github_account: personal
     default_tool: codex
     allowed_intents:

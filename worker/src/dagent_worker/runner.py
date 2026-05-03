@@ -27,6 +27,7 @@ class RunnerCancelled(RunnerError):
 
 
 CODE_TASK_INTENTS = {"code_task", "codex_task", "claude_task"}
+CHATGPT_TASK_INTENTS = {"chatgpt_task"}
 
 
 class JobRunner:
@@ -87,6 +88,8 @@ class JobRunner:
     def _execute(self, job_id: str, payload: JobRequest, log_path: Path) -> dict[str, Any]:
         if payload.intent in {"capture_idea", "research_note", "document_task", "job_packet"}:
             return self._create_note(job_id, payload, log_path)
+        if payload.intent in CHATGPT_TASK_INTENTS:
+            return self._chatgpt_task(job_id, payload, log_path)
         if payload.intent in CODE_TASK_INTENTS:
             return self._code_task(job_id, payload, log_path)
         if payload.intent == "repo_status":
@@ -188,6 +191,91 @@ class JobRunner:
             log.write(f"Completion note: {final_note_path}\n")
             if result["code_server_url"]:
                 log.write(f"Code-server: {result['code_server_url']}\n")
+        return result
+
+    def _chatgpt_task(self, job_id: str, payload: JobRequest, log_path: Path) -> dict[str, Any]:
+        workspace_path = _agent_workspace(self._config, payload)
+        workspace_path.mkdir(parents=True, exist_ok=True)
+        summary_path = _agent_summary_path(self._config, job_id)
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        flavor = _agent_flavor(self._config, payload)
+        resume_session_id = (
+            _metadata_text(payload, "resume_session_id")
+            or _metadata_text(payload, "codex_session_id")
+            or _metadata_text(payload, "chat_session_id")
+            or _metadata_text(payload, "thread_id")
+        )
+        continuation_of = _metadata_text(payload, "continuation_of") or _metadata_text(payload, "parent_job_id")
+        tool = self._config.tools.get(flavor)
+        if tool is None:
+            tool = _builtin_agent_resume_tool(self._config, flavor) if resume_session_id else _builtin_agent_tool(self._config, flavor)
+        repo = RepoConfig(name="chatgpt", path=workspace_path, allowed_intents=("*",))
+        prompt = _chatgpt_prompt(payload, workspace_path=workspace_path, continuation=bool(resume_session_id))
+        command = _render_command(
+            tool.command,
+            payload=payload,
+            repo=repo,
+            job_id=job_id,
+            extra={
+                "flavor": flavor,
+                "workspace_path": str(workspace_path),
+                "summary_path": str(summary_path),
+                "prompt": prompt,
+                "resume_session_id": resume_session_id,
+                "continuation_of": continuation_of,
+            },
+        )
+
+        with log_path.open("a", encoding="utf-8") as log:
+            log.write(f"ChatGPT worker workspace: {workspace_path}\n")
+            log.write(f"Flavor: {flavor}\n")
+            if resume_session_id:
+                log.write(f"Resume session: {resume_session_id}\n")
+            if continuation_of:
+                log.write(f"Continuation of job: {continuation_of}\n")
+            if payload.dry_run:
+                log.write("Dry run: agent command was not executed.\n")
+
+        if payload.dry_run:
+            completed = {"exit_code": 0, "stdout": "", "stderr": ""}
+        else:
+            completed = self._run_command(
+                job_id,
+                command,
+                workspace_path,
+                timeout_seconds=tool.timeout_seconds,
+                log_path=log_path,
+            )
+
+        last_message = summary_path.read_text(encoding="utf-8") if summary_path.exists() else ""
+        if _agent_reported_failure(last_message, completed["stdout"], completed["stderr"]):
+            raise RunnerError(_agent_failure_error(flavor, last_message))
+        session_id = _codex_session_id(completed["stderr"], completed["stdout"], last_message) or resume_session_id
+        thread_id = resume_session_id or session_id
+        status_short = ""
+        if _is_git_worktree(workspace_path):
+            status_short = self._git_output(job_id, workspace_path, ["git", "status", "--short"], log_path)
+        result = {
+            "kind": "chatgpt_task",
+            "workspace_path": str(workspace_path),
+            "flavor": flavor,
+            "command": shlex.join(command),
+            "exit_code": completed["exit_code"],
+            "stdout_tail": _tail(completed["stdout"]),
+            "stderr_tail": _tail(completed["stderr"]),
+            "session_id": session_id,
+            "resume_session_id": resume_session_id,
+            "thread_id": thread_id,
+            "continuation_of": continuation_of,
+            "status_short": status_short,
+            "last_message": _tail(last_message, limit=5000),
+            "summary_path": str(summary_path),
+        }
+        with log_path.open("a", encoding="utf-8") as log:
+            log.write("\nDONE ChatGPT task\n")
+            if thread_id:
+                log.write(f"Thread: {thread_id}\n")
+            log.write(f"Summary: {summary_path}\n")
         return result
 
     def _resolve_repo(self, repo_name: str | None) -> RepoConfig:
@@ -375,41 +463,73 @@ class JobRunner:
         with self._lock:
             self._processes[job_id] = process
 
+        stdout_parts: list[str] = []
+        stderr_parts: list[str] = []
+        stream_lock = threading.Lock()
+
+        def drain_stream(stream: Any, sink: list[str], label: str) -> None:
+            wrote_label = False
+            try:
+                for chunk in iter(stream.readline, ""):
+                    if not chunk:
+                        break
+                    sink.append(chunk)
+                    with stream_lock:
+                        with log_path.open("a", encoding="utf-8") as log:
+                            if label and not wrote_label:
+                                log.write(f"\n[{label}]\n")
+                                wrote_label = True
+                            log.write(chunk)
+            finally:
+                stream.close()
+
+        stdout_thread = threading.Thread(
+            target=drain_stream,
+            args=(process.stdout, stdout_parts, ""),
+            daemon=True,
+        )
+        stderr_thread = threading.Thread(
+            target=drain_stream,
+            args=(process.stderr, stderr_parts, "stderr"),
+            daemon=True,
+        )
+        stdout_thread.start()
+        stderr_thread.start()
+
         try:
             started = time.monotonic()
             while True:
                 if self._is_cancelled(job_id):
                     _terminate_process(process)
-                    stdout, stderr = process.communicate(timeout=5)
+                    process.wait(timeout=5)
+                    stdout_thread.join(timeout=5)
+                    stderr_thread.join(timeout=5)
                     with log_path.open("a", encoding="utf-8") as log:
-                        log.write(stdout or "")
-                        log.write(stderr or "")
                         log.write("\nCommand cancelled\n")
                     raise RunnerCancelled("cancelled")
-                try:
-                    stdout, stderr = process.communicate(timeout=0.25)
+                returncode = process.poll()
+                if returncode is not None:
                     break
-                except subprocess.TimeoutExpired:
-                    if time.monotonic() - started > timeout_seconds:
-                        _terminate_process(process)
-                        stdout, stderr = process.communicate(timeout=5)
-                        with log_path.open("a", encoding="utf-8") as log:
-                            log.write(stdout or "")
-                            log.write(stderr or "")
-                            log.write(f"\nCommand timed out after {timeout_seconds} seconds\n")
-                        raise RunnerError(f"command timed out after {timeout_seconds} seconds")
+                if time.monotonic() - started > timeout_seconds:
+                    _terminate_process(process)
+                    process.wait(timeout=5)
+                    stdout_thread.join(timeout=5)
+                    stderr_thread.join(timeout=5)
+                    with log_path.open("a", encoding="utf-8") as log:
+                        log.write(f"\nCommand timed out after {timeout_seconds} seconds\n")
+                    raise RunnerError(f"command timed out after {timeout_seconds} seconds")
+                time.sleep(0.25)
         finally:
             with self._lock:
                 self._processes.pop(job_id, None)
 
+        stdout_thread.join(timeout=5)
+        stderr_thread.join(timeout=5)
         returncode = process.returncode
+        stdout = "".join(stdout_parts)
+        stderr = "".join(stderr_parts)
 
         with log_path.open("a", encoding="utf-8") as log:
-            if stdout:
-                log.write(stdout)
-            if stderr:
-                log.write("\n[stderr]\n")
-                log.write(stderr)
             log.write(f"\nexit_code: {returncode}\n")
 
         if returncode != 0:
@@ -537,6 +657,145 @@ def _builtin_code_tool(config: WorkerConfig, flavor: str) -> CommandConfig:
             allowed_repos=("*",),
         )
     raise RunnerError(f"code flavor {flavor!r} is not configured")
+
+
+def _agent_flavor(config: WorkerConfig, payload: JobRequest) -> str:
+    metadata_flavor = str(payload.metadata.get("flavor") or "").strip()
+    if metadata_flavor:
+        return metadata_flavor
+    if payload.tool:
+        return payload.tool
+    return config.intent_tools.get(payload.intent) or "codex"
+
+
+def _builtin_agent_tool(config: WorkerConfig, flavor: str) -> CommandConfig:
+    if flavor == "codex":
+        return CommandConfig(
+            name="codex",
+            command=(
+                "codex",
+                "--ask-for-approval",
+                config.code_codex_approval_policy,
+                "--sandbox",
+                config.code_codex_sandbox,
+                "exec",
+                "--cd",
+                "{workspace_path}",
+                "--skip-git-repo-check",
+                "--output-last-message",
+                "{summary_path}",
+                "{prompt}",
+            ),
+            timeout_seconds=config.agent_timeout_seconds,
+            allowed_repos=("*",),
+        )
+    raise RunnerError(f"ChatGPT flavor {flavor!r} is not configured")
+
+
+def _builtin_agent_resume_tool(config: WorkerConfig, flavor: str) -> CommandConfig:
+    if flavor == "codex":
+        return CommandConfig(
+            name="codex",
+            command=(
+                "codex",
+                "--ask-for-approval",
+                config.code_codex_approval_policy,
+                "--sandbox",
+                config.code_codex_sandbox,
+                "exec",
+                "resume",
+                "--skip-git-repo-check",
+                "--output-last-message",
+                "{summary_path}",
+                "{resume_session_id}",
+                "{prompt}",
+            ),
+            timeout_seconds=config.agent_timeout_seconds,
+            allowed_repos=("*",),
+        )
+    raise RunnerError(f"ChatGPT continuation requires configured resume support for flavor {flavor!r}")
+
+
+def _agent_workspace(config: WorkerConfig, payload: JobRequest) -> Path:
+    metadata = payload.metadata if isinstance(payload.metadata, dict) else {}
+    path_value = metadata.get("workspace_path") or metadata.get("workspace") or metadata.get("path")
+    if path_value:
+        return Path(str(path_value)).expanduser().resolve()
+    if config.agent_workspace_dir:
+        return config.agent_workspace_dir
+    if config.trusted_roots:
+        return config.trusted_roots[0]
+    return Path.cwd().resolve()
+
+
+def _agent_summary_path(config: WorkerConfig, job_id: str) -> Path:
+    root = config.agent_summaries_dir or (config.data_dir / "chatgpt-summaries")
+    return root / f"{job_id}-summary.md"
+
+
+def _metadata_text(payload: JobRequest, key: str) -> str:
+    metadata = payload.metadata if isinstance(payload.metadata, dict) else {}
+    value = metadata.get(key)
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list, tuple, set)):
+        return ""
+    return str(value).strip()
+
+
+_CODEX_SESSION_RE = re.compile(
+    r"\bsession id:\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _codex_session_id(*texts: str) -> str:
+    joined = "\n".join(str(text or "") for text in texts)
+    match = _CODEX_SESSION_RE.search(joined)
+    return match.group(1).lower() if match else ""
+
+
+def _is_git_worktree(path: Path) -> bool:
+    completed = subprocess.run(
+        ["git", "-C", str(path), "rev-parse", "--is-inside-work-tree"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    return completed.returncode == 0 and completed.stdout.strip() == "true"
+
+
+def _chatgpt_prompt(payload: JobRequest, *, workspace_path: Path, continuation: bool = False) -> str:
+    lines = [
+        "You are running inside dAgent's ChatGPT Worker.",
+        f"Workspace path: {workspace_path}",
+        "",
+    ]
+    if continuation:
+        lines.extend(
+            [
+                "This is a continuation of the existing Codex session.",
+                "Use the prior thread context when it is relevant, then handle the new user task.",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "This worker is intentionally configured by the user to run without per-task approval.",
+            "You may answer simple chat directly, use shell commands, create files, edit files, and run local tools when the task calls for it.",
+            "",
+            "User task:",
+            payload.task,
+            "",
+            "Operating rules:",
+            "- If this is a simple chat/question, answer concisely and do not edit files.",
+            "- If the user asks you to create, edit, inspect, run, or organize something, do the task directly.",
+            "- Prefer the workspace path unless the user names another path or the task clearly requires a different local location.",
+            "- Do not expose secrets or private file contents unless the user explicitly asks for that exact information.",
+            "- End with a concise response, including changed files and checks run when applicable.",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _code_prompt(payload: JobRequest, *, project: Project, worktree_path: Path, branch: str) -> str:

@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HOST="${1:-n8n.divyeshvishwakarma.com}"
-LOCAL_URL="http://127.0.0.1:5678"
-PUBLIC_URL="https://$HOST"
-WEBHOOK_PATH="${DAGENT_PUBLIC_WEBHOOK_PATH:-/webhook/dagent-watch-capture}"
 ENV_FILE="docker/automation-stack/.env"
 
 get_env() {
@@ -14,6 +10,16 @@ get_env() {
   fi
   awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$ENV_FILE"
 }
+
+HOST="${1:-$(get_env N8N_HOST)}"
+HOST="${HOST:-localhost}"
+LOCAL_URL="http://127.0.0.1:5678"
+if [[ "$HOST" == "localhost" || "$HOST" == "127.0.0.1" ]]; then
+  PUBLIC_URL="http://$HOST:5678"
+else
+  PUBLIC_URL="https://$HOST"
+fi
+WEBHOOK_PATH="${DAGENT_PUBLIC_WEBHOOK_PATH:-/webhook/dagent-watch-capture}"
 
 has_access_token() {
   [[ -n "$cf_access_client_id" && -n "$cf_access_client_secret" && "$cf_access_client_id" != "replace-with-cloudflare-access-client-id" && "$cf_access_client_secret" != "replace-with-cloudflare-access-client-secret" ]]

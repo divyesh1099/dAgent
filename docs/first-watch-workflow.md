@@ -102,7 +102,7 @@ Connect `Webhook` -> `HTTP Request`.
 
 ```text
 Method: POST
-URL: ={{ $env.DAGENT_WORKER_URL }}/v1/shortcut
+URL: ={{ (["chat", "chatgpt", "assistant", "assistant_task", "chatgpt_task"].includes(String($json.payload.intent || '').toLowerCase()) ? ($env.DAGENT_CHATGPT_WORKER_URL || 'http://host.docker.internal:8767') : ($env.DAGENT_WORKER_URL || 'http://host.docker.internal:8765')).replace(/\/$/, '') + '/v1/shortcut' }}
 Send Headers: on
 Send Body: on
 Body Content Type: JSON
@@ -113,7 +113,7 @@ JSON Body: ={{ $json.payload }}
 Headers:
 
 ```text
-Authorization: ={{ 'Bearer ' + $env.DAGENT_WORKER_API_TOKEN }}
+Authorization: ={{ 'Bearer ' + (["chat", "chatgpt", "assistant", "assistant_task", "chatgpt_task"].includes(String($json.payload.intent || '').toLowerCase()) ? ($env.DAGENT_CHATGPT_WORKER_API_TOKEN || $env.DAGENT_WORKER_API_TOKEN) : $env.DAGENT_WORKER_API_TOKEN) }}
 Content-Type: application/json
 Idempotency-Key: ={{ $json.idempotency_key }}
 ```

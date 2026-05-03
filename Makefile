@@ -1,4 +1,7 @@
-.PHONY: install test compile worker compose-config secrets
+.PHONY: bootstrap install test compile worker compose-config secrets n8n-import
+
+bootstrap:
+	./scripts/bootstrap_dagent.sh
 
 install:
 	python3 -m venv .venv
@@ -16,6 +19,8 @@ worker:
 compose-config:
 	docker compose --env-file docker/automation-stack/.env.example -f docker/automation-stack/compose.yml config
 
+n8n-import:
+	./scripts/n8nctl import-workflows
+
 secrets:
 	./scripts/generate_secrets.sh
-

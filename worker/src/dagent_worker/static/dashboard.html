@@ -815,6 +815,11 @@
 
     function selectJob(worker, id) {
       state.selected = findJob(worker, id);
+      if (state.selected && state.selected.intent === "chatgpt_task") {
+        renderJobs();
+        openEnhancedDetail({sameWindow: true});
+        return;
+      }
       state.tab = "output";
       renderJobs();
       renderDetails();
@@ -1022,15 +1027,24 @@
       await action("notify");
     }
 
-    function openEnhancedDetail() {
-      const job = state.selected;
-      if (!job) return;
+    function enhancedDetailUrl(job) {
       const params = new URLSearchParams({
         token: state.token,
         worker: job.worker || "",
         job: job.id || ""
       });
-      window.open(`/ui/detail#${params.toString()}`, "_blank", "noopener,noreferrer");
+      return `/ui/detail#${params.toString()}`;
+    }
+
+    function openEnhancedDetail(options = {}) {
+      const job = state.selected;
+      if (!job) return;
+      const url = enhancedDetailUrl(job);
+      if (options.sameWindow) {
+        window.location.assign(url);
+      } else {
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
     }
 
     async function refresh() {

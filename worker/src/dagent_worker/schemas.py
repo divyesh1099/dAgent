@@ -142,6 +142,20 @@ class JobRequeueRequest(BaseModel):
     cancel_existing: bool = False
 
 
+class JobContinueRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task: str = Field(min_length=1, max_length=16000)
+
+    @field_validator("task")
+    @classmethod
+    def task_must_have_text(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("task must not be blank")
+        return stripped
+
+
 class ReadyResponse(BaseModel):
     ok: bool
     configured_repos: list[str]
