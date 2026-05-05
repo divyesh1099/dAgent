@@ -22,7 +22,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const input = $input.first().json;\nconst headers = input.headers || {};\nconst body = input.body || {};\nconst env = typeof $env !== 'undefined' ? $env : {};\n\nfunction header(name) {\n  const wanted = name.toLowerCase();\n  for (const [key, value] of Object.entries(headers)) {\n    if (key.toLowerCase() === wanted) return value;\n  }\n  return undefined;\n}\n\nconst expectedSecret = env.DAGENT_SHORTCUT_SECRET || '';\nconst providedSecret = header('x-dagent-shortcut-secret') || '';\nif (!expectedSecret || providedSecret !== expectedSecret) {\n  throw new Error('invalid shortcut secret');\n}\n\nconst requestId = header('cf-ray') || header('x-request-id') || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;\nconst idempotencyKey = `watch-${$execution.id}-${requestId}`.slice(0, 160);\nconst payload = {...body};\n\nif (!payload.intent && !payload.action && (payload.task || payload.text || payload.idea || payload.message || payload.Task)) {\n  payload.intent = 'capture_idea';\n}\nif (!payload.task && (payload.text || payload.idea || payload.message || payload.Task)) {\n  payload.task = payload.text || payload.idea || payload.message || payload.Task;\n}\nif (!payload.source) {\n  payload.source = 'apple_watch';\n}\nif (payload.task && !payload.input_type) {\n  payload.input_type = 'voice';\n}\nif (payload.task && !payload.idempotency_key) {\n  payload.idempotency_key = idempotencyKey;\n}\n\npayload.wait_seconds = 0;\n\nreturn [{ json: { payload, idempotency_key: payload.idempotency_key || idempotencyKey } }];"
+        "jsCode": "const input = $input.first().json;\nconst headers = input.headers || {};\nconst body = input.body || {};\nconst env = typeof $env !== 'undefined' ? $env : {};\n\nfunction header(name) {\n  const wanted = name.toLowerCase();\n  for (const [key, value] of Object.entries(headers)) {\n    if (key.toLowerCase() === wanted) return value;\n  }\n  return undefined;\n}\n\nconst expectedSecret = env.DAGENT_SHORTCUT_SECRET || '';\nconst providedSecret = header('x-dagent-shortcut-secret') || '';\nif (!expectedSecret || providedSecret !== expectedSecret) {\n  throw new Error('invalid shortcut secret');\n}\n\nconst requestId = header('cf-ray') || header('x-request-id') || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;\nconst idempotencyKey = `watch-${$execution.id}-${requestId}`.slice(0, 160);\nconst payload = {...body};\nfor (const [key, value] of Object.entries(payload)) {\n  if (value === null || value === undefined || value === '') {\n    delete payload[key];\n  }\n}\n\nif (!payload.intent && !payload.action && (payload.task || payload.text || payload.idea || payload.message || payload.Task)) {\n  payload.intent = 'capture_idea';\n}\nif (!payload.task && (payload.text || payload.idea || payload.message || payload.Task)) {\n  payload.task = payload.text || payload.idea || payload.message || payload.Task;\n}\nif (!payload.source) {\n  payload.source = 'apple_watch';\n}\nif (payload.task && !payload.input_type) {\n  payload.input_type = 'voice';\n}\nif (payload.task && !payload.idempotency_key) {\n  payload.idempotency_key = idempotencyKey;\n}\n\npayload.wait_seconds = 0;\n\nreturn [{ json: { payload, idempotency_key: payload.idempotency_key || idempotencyKey } }];"
       },
       "id": "420f3c76-934a-44a6-b91f-5f6b2d02aca8",
       "name": "Normalize Request",
@@ -59,6 +59,11 @@
         "specifyBody": "json",
         "jsonBody": "={{ $json.payload }}",
         "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
           "timeout": 120000
         }
       },
@@ -73,7 +78,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const job = $input.first().json || {};\nconst result = job.result || {};\nlet reply = String(result.last_message || job.error || '').trim();\n\nif (!reply) {\n  if (job.status === 'running' || job.status === 'queued') {\n    reply = `Task started. Job ${job.id || ''}`.trim();\n  } else if (job.status) {\n    reply = String(job.status);\n  } else {\n    reply = 'Request received.';\n  }\n}\n\nif (reply.length > 3500) {\n  reply = `${reply.slice(0, 3500)}\\n...[truncated]`;\n}\n\nreturn [{\n  json: {\n    ok: !job.error && job.status !== 'failed',\n    status: job.status || 'unknown',\n    reply,\n    message: reply,\n    job_id: job.id || null,\n    worker: job.worker || null,\n    intent: job.intent || null,\n    code_server_url: result.code_server_url || null,\n    workspace_path: result.workspace_path || null,\n  },\n}];"
+        "jsCode": "const job = $input.first().json || {};\n\nif (Array.isArray(job.options) || Array.isArray(job.projects)) {\n  return [{ json: { ok: true, ...job } }];\n}\n\nif (job.detail && !job.status && !job.id) {\n  const reply = typeof job.detail === 'string' ? job.detail : JSON.stringify(job.detail);\n  return [{ json: { ok: false, status: 'error', reply, message: reply } }];\n}\n\nconst result = job.result || {};\nlet reply = String(result.last_message || job.error || '').trim();\n\nif (!reply) {\n  if (job.status === 'running' || job.status === 'queued') {\n    reply = `Task started. Job ${job.id || ''}`.trim();\n  } else if (job.status) {\n    reply = String(job.status);\n  } else {\n    reply = 'Request received.';\n  }\n}\n\nif (reply.length > 3500) {\n  reply = `${reply.slice(0, 3500)}\\n...[truncated]`;\n}\n\nreturn [{\n  json: {\n    ok: !job.error && job.status !== 'failed',\n    status: job.status || 'unknown',\n    reply,\n    message: reply,\n    job_id: job.id || null,\n    worker: job.worker || null,\n    intent: job.intent || null,\n    code_server_url: result.code_server_url || null,\n    workspace_path: result.workspace_path || null,\n  },\n}];"
       },
       "id": "23c3d140-0e54-43be-9d15-ffadf5782ca1",
       "name": "Shortcut Response",

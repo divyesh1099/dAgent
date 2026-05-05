@@ -275,11 +275,14 @@ async def shortcut_dispatch(
         return {"status": "ok", "approvals": approvals}
 
     if action in {"approve_job", "approval", "approve", "reject_job", "reject"}:
+        approval_code = _shortcut_approval_code(body)
+        if approval_code is None:
+            raise HTTPException(status_code=400, detail="approval_code is required")
         try:
             approval = ApprovalRequest.model_validate(
                 {
                     "decision": _approval_decision(action, body),
-                    "approval_code": body.get("approval_code") or body.get("code"),
+                    "approval_code": approval_code,
                 }
             )
         except ValidationError as exc:
@@ -796,6 +799,16 @@ def _approval_decision(action: str, body: dict[str, Any]) -> str:
     if decision in {"approve", "reject"}:
         return decision
     return "reject" if action in {"reject_job", "reject"} else "approve"
+
+
+def _shortcut_approval_code(body: dict[str, Any]) -> str | None:
+    value = body.get("approval_code")
+    if value is None:
+        value = body.get("code")
+    if value is None:
+        return None
+    code = str(value).strip()
+    return code or None
 
 
 def _approve_job_response(app_: FastAPI, job_id: str, approval: ApprovalRequest) -> JobResponse:

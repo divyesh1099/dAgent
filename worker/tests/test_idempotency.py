@@ -11,6 +11,7 @@ from dagent_worker.main import (
     _normalize_shortcut_body,
     _same_idempotent_payload,
     _session_id_from_text,
+    _shortcut_approval_code,
     _shortcut_job_body,
 )
 from dagent_worker.notifier import Notifier
@@ -99,6 +100,12 @@ def test_shortcut_job_body_accepts_message_as_task() -> None:
     assert payload["task"] == "hello assistant"
     assert "message" not in payload
     assert "unused_shortcut_field" not in payload
+
+
+def test_shortcut_approval_code_ignores_missing_and_blank_values() -> None:
+    assert _shortcut_approval_code({"approval_code": None}) is None
+    assert _shortcut_approval_code({"approval_code": "   "}) is None
+    assert _shortcut_approval_code({"code": " approve-me "}) == "approve-me"
 
 
 def test_codex_session_id_can_be_read_from_worker_output() -> None:
