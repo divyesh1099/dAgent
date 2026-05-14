@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
+import shutil
 from typing import Any
 
 import yaml
@@ -59,6 +60,7 @@ class WorkerConfig:
     code_worktrees_dir: Path | None = None
     code_server_url: str = ""
     code_server_folder_url_template: str = ""
+    code_codex_executable: str = "codex"
     code_codex_sandbox: str = "workspace-write"
     code_codex_approval_policy: str = "never"
     agent_workspace_dir: Path | None = None
@@ -140,6 +142,10 @@ def load_config(path: str | os.PathLike[str] | None = None) -> WorkerConfig:
     code_server_folder_url_template = str(
         code_raw.get("code_server_folder_url_template", raw.get("code_server_folder_url_template", "")) or ""
     )
+    code_codex_executable = _resolve_executable(
+        os.getenv("DAGENT_CODEX_BIN") or code_raw.get("codex_executable") or _default_codex_executable(),
+        base_dir,
+    )
     code_codex_sandbox = str(
         os.getenv("DAGENT_CODEX_SANDBOX", code_raw.get("codex_sandbox", "workspace-write")) or "workspace-write"
     )
@@ -168,6 +174,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> WorkerConfig:
         code_worktrees_dir=code_worktrees_dir,
         code_server_url=code_server_url,
         code_server_folder_url_template=code_server_folder_url_template,
+        code_codex_executable=code_codex_executable,
         code_codex_sandbox=code_codex_sandbox,
         code_codex_approval_policy=code_codex_approval_policy,
         agent_workspace_dir=agent_workspace_dir,
@@ -242,3 +249,66 @@ def _optional_path(value: Any, base_dir: Path) -> Path | None:
     if value is None or str(value).strip() == "":
         return None
     return _resolve_path(value, base_dir)
+
+
+def _resolve_executable(value: Any, base_dir: Path) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "codex"
+    if "/" not in text and "\\" not in text and text not in {".", ".."}:
+        return text
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        path = base_dir / path
+    return str(path.resolve())
+
+
+def _default_codex_executable() -> str:
+    resolved = shutil.which("codex")
+    if resolved:
+        return resolved
+
+    candidates = _discover_codex_candidates()
+    if candidates:
+        return str(candidates[-1])
+    return "codex"
+
+
+def _discover_codex_candidates() -> list[Path]:
+    homes = [Path.home()]
+    extra_home = os.getenv("HOME")
+    if extra_home:
+        extra = Path(extra_home).expanduser()
+        if extra not in homes:
+            homes.append(extra)
+
+    roots: list[Path] = []
+    for home in homes:
+        roots.extend(
+            [
+                home / ".local" / "share" / "code-server" / "extensions",
+                home / ".vscode" / "extensions",
+                home / ".vscode-server" / "extensions",
+                home / ".cursor" / "extensions",
+            ]
+        )
+
+    found: list[Path] = []
+    for root in roots:
+        if not root.exists():
+            continue
+        for candidate in root.glob("openai.chatgpt*/bin/*/codex"):
+            try:
+                if candidate.is_file() and os.access(candidate, os.X_OK):
+                    found.append(candidate.resolve())
+            except OSError:
+                continue
+    found.sort(key=_path_sort_key)
+    return found
+
+
+def _path_sort_key(path: Path) -> tuple[float, str]:
+    try:
+        return (path.stat().st_mtime, str(path))
+    except OSError:
+        return (0.0, str(path))

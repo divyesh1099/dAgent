@@ -458,7 +458,7 @@ class JobRunner:
                 start_new_session=True,
             )
         except FileNotFoundError as exc:
-            raise RunnerError(f"executable not found: {command[0]}") from exc
+            raise RunnerError(_missing_executable_message(command[0])) from exc
 
         with self._lock:
             self._processes[job_id] = process
@@ -641,7 +641,7 @@ def _builtin_code_tool(config: WorkerConfig, flavor: str) -> CommandConfig:
         return CommandConfig(
             name="codex",
             command=(
-                "codex",
+                config.code_codex_executable,
                 "--ask-for-approval",
                 config.code_codex_approval_policy,
                 "--sandbox",
@@ -673,7 +673,7 @@ def _builtin_agent_tool(config: WorkerConfig, flavor: str) -> CommandConfig:
         return CommandConfig(
             name="codex",
             command=(
-                "codex",
+                config.code_codex_executable,
                 "--ask-for-approval",
                 config.code_codex_approval_policy,
                 "--sandbox",
@@ -697,7 +697,7 @@ def _builtin_agent_resume_tool(config: WorkerConfig, flavor: str) -> CommandConf
         return CommandConfig(
             name="codex",
             command=(
-                "codex",
+                config.code_codex_executable,
                 "--ask-for-approval",
                 config.code_codex_approval_policy,
                 "--sandbox",
@@ -892,6 +892,16 @@ def _agent_reported_failure(last_message: str, stdout: str, stderr: str) -> bool
 def _agent_failure_error(flavor: str, last_message: str) -> str:
     detail = last_message.strip().splitlines()[0] if last_message.strip() else "agent reported failure"
     return f"{flavor} did not complete the task: {detail}"
+
+
+def _missing_executable_message(executable: str) -> str:
+    message = f"executable not found: {executable}"
+    if Path(executable).name == "codex":
+        return (
+            f"{message}. Set DAGENT_CODEX_BIN or code.codex_executable to the Codex CLI path "
+            "(for example the OpenAI ChatGPT code-server extension binary)."
+        )
+    return message
 
 
 def _tail(text: str, limit: int = 6000) -> str:

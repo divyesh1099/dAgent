@@ -66,6 +66,11 @@ root.
 The built-in Codex command uses the generated worktree as the execution folder
 and writes Codex's final response to `.dagent/<job-id>-summary.md`.
 
+If the worker service cannot find `codex` on its `PATH`, set
+`DAGENT_CODEX_BIN` in the worker env file or `code.codex_executable` in the
+worker config. This is commonly needed when Codex comes from the OpenAI
+ChatGPT code-server extension instead of a global CLI install.
+
 This workstation currently uses:
 
 ```yaml

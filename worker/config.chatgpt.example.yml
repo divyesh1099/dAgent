@@ -15,6 +15,9 @@ code:
   worktrees_dir: .data/code-worktrees-chatgpt
   code_server_url: "http://127.0.0.1:8766"
   code_server_folder_url_template: "http://127.0.0.1:8766/?folder={folder}"
+  # Optional override when Codex is not on PATH, for example when using the
+  # OpenAI ChatGPT code-server extension binary.
+  # codex_executable: "/home/you/.local/share/code-server/extensions/openai.chatgpt-*/bin/linux-x86_64/codex"
   codex_sandbox: danger-full-access
   codex_approval_policy: never
 

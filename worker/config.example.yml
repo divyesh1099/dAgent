@@ -13,6 +13,9 @@ code:
   code_server_url: "http://127.0.0.1:8766"
   # Example once code-server is behind Cloudflare:
   code_server_folder_url_template: "http://127.0.0.1:8766/?folder={folder}"
+  # Optional override when Codex is not on PATH, for example when using the
+  # OpenAI ChatGPT code-server extension binary.
+  # codex_executable: "/home/you/.local/share/code-server/extensions/openai.chatgpt-*/bin/linux-x86_64/codex"
   # Keep workspace-write where bubblewrap works; use danger-full-access only behind approval
   # and with worktree isolation when the service cannot create Codex's Linux sandbox.
   codex_sandbox: workspace-write
