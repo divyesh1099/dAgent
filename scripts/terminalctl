@@ -1,0 +1,228 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+USER_UNIT_DIR="$XDG_CONFIG_HOME/systemd/user"
+UNIT_TEMPLATE="$ROOT/services/systemd/terminal-dagent.service"
+UNIT_PATH="$USER_UNIT_DIR/terminal-dagent.service"
+ENV_DIR="$XDG_CONFIG_HOME/dagent"
+ENV_FILE="$ENV_DIR/terminal.env"
+TTYD_VERSION="${TTYD_VERSION:-1.7.7}"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  scripts/terminalctl up               Install, enable, and start the hosted terminal
+  scripts/terminalctl init             Create the terminal env file if needed
+  scripts/terminalctl install          Install/update ttyd and the systemd user unit
+  scripts/terminalctl boot             Enable user services at PC boot
+  scripts/terminalctl start            Start the hosted terminal
+  scripts/terminalctl stop             Stop the hosted terminal
+  scripts/terminalctl restart          Restart the hosted terminal
+  scripts/terminalctl enable           Start the terminal automatically
+  scripts/terminalctl disable          Stop automatic startup
+  scripts/terminalctl status           Show systemd status
+  scripts/terminalctl logs             Follow logs
+  scripts/terminalctl url              Print the local terminal URL
+  scripts/terminalctl creds            Print the optional ttyd username and password
+  scripts/terminalctl doctor           Check local prerequisites and HTTP reachability
+
+Files:
+  Env file:        ~/.config/dagent/terminal.env
+  User service:    ~/.config/systemd/user/terminal-dagent.service
+  Local URL:       http://127.0.0.1:7681
+  Suggested host:  https://terminal.divyeshvishwakarma.com
+EOF
+}
+
+main() {
+  local command="${1:-help}"
+  shift || true
+
+  case "$command" in
+    up) cmd_up ;;
+    init) cmd_init ;;
+    install) cmd_install ;;
+    boot) cmd_boot ;;
+    start) systemctl_user start terminal-dagent.service ;;
+    stop) systemctl_user stop terminal-dagent.service ;;
+    restart) systemctl_user restart terminal-dagent.service ;;
+    enable) systemctl_user enable terminal-dagent.service ;;
+    disable) systemctl_user disable terminal-dagent.service ;;
+    status) systemctl_user status terminal-dagent.service --no-pager ;;
+    logs) journalctl --user -u terminal-dagent.service -f ;;
+    url) load_terminal_env; echo "http://127.0.0.1:${TERMINAL_PORT}" ;;
+    creds) cmd_creds ;;
+    doctor) cmd_doctor ;;
+    help|-h|--help) usage ;;
+    *) usage; exit 2 ;;
+  esac
+}
+
+cmd_up() {
+  cmd_install
+  systemctl_user enable terminal-dagent.service
+  systemctl_user restart terminal-dagent.service
+  echo "Hosted terminal is running."
+  echo "URL: $(local_url)"
+  echo "Cloudflare host: https://terminal.divyeshvishwakarma.com"
+}
+
+cmd_init() {
+  mkdir -p "$ENV_DIR"
+
+  if [[ -f "$ENV_FILE" ]]; then
+    echo "Terminal env already exists: $ENV_FILE"
+    return 0
+  fi
+
+  umask 077
+  cat >"$ENV_FILE" <<EOF
+TTYD_BIN=$HOME/.local/bin/ttyd
+TERMINAL_BIND_HOST=127.0.0.1
+TERMINAL_PORT=7681
+TERMINAL_START_DIR=$HOME
+TERMINAL_TITLE="Divyesh Terminal"
+TERMINAL_TYPE=xterm-256color
+TERMINAL_USERNAME=
+TERMINAL_PASSWORD=
+EOF
+
+  echo "Created terminal env: $ENV_FILE"
+  echo "Localhost auth: disabled by default"
+  echo "Remote auth: protect the Cloudflare hostname with Access"
+}
+
+cmd_install() {
+  require_command curl
+  require_command install
+  require_command sha256sum
+  require_command systemctl
+
+  cmd_init
+  install_ttyd
+  install_unit
+}
+
+cmd_boot() {
+  require_command loginctl
+
+  if loginctl show-user "$USER" -p Linger --value 2>/dev/null | grep -qx yes; then
+    echo "Linger is already enabled for $USER. User services can start at boot."
+    return 0
+  fi
+
+  if loginctl enable-linger "$USER"; then
+    echo "Enabled linger for $USER. User services can start at boot."
+  else
+    echo "Could not enable linger automatically."
+    echo "Run this once:"
+    echo "  sudo loginctl enable-linger $USER"
+    exit 1
+  fi
+}
+
+cmd_creds() {
+  load_terminal_env
+  echo "Username: ${TERMINAL_USERNAME:-<none>}"
+  echo "Password: ${TERMINAL_PASSWORD:-<none>}"
+  echo "Env file: $ENV_FILE"
+}
+
+cmd_doctor() {
+  load_terminal_env
+
+  require_command curl
+  if [[ ! -x "${TTYD_BIN:-$HOME/.local/bin/ttyd}" ]]; then
+    echo "Missing ttyd binary at ${TTYD_BIN:-$HOME/.local/bin/ttyd}" >&2
+    exit 1
+  fi
+
+  local url
+  url="$(local_url)"
+  local curl_args=(-fsSI "$url")
+  if [[ -n "${TERMINAL_USERNAME:-}" || -n "${TERMINAL_PASSWORD:-}" ]]; then
+    curl_args=(-fsSI -u "${TERMINAL_USERNAME}:${TERMINAL_PASSWORD}" "$url")
+  fi
+
+  systemctl_user status terminal-dagent.service --no-pager || true
+  echo
+  curl "${curl_args[@]}"
+  echo "HTTP check passed: $url"
+}
+
+install_ttyd() {
+  mkdir -p "$HOME/.local/bin"
+
+  local arch asset base_url tmpdir
+  arch="$(uname -m)"
+  asset="$(ttyd_asset_name "$arch")"
+  base_url="https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}"
+  tmpdir="$(mktemp -d)"
+
+  curl -fsSLo "$tmpdir/$asset" "$base_url/$asset"
+  curl -fsSLo "$tmpdir/SHA256SUMS" "$base_url/SHA256SUMS"
+  (
+    cd "$tmpdir"
+    grep "  $asset\$" SHA256SUMS | sha256sum -c -
+  )
+
+  install -m 755 "$tmpdir/$asset" "$HOME/.local/bin/ttyd"
+  rm -rf "$tmpdir"
+  echo "Installed ttyd ${TTYD_VERSION} to $HOME/.local/bin/ttyd"
+}
+
+install_unit() {
+  mkdir -p "$USER_UNIT_DIR"
+
+  local escaped_root
+  escaped_root="${ROOT//&/\\&}"
+  sed "s|{{DAGENT_ROOT}}|$escaped_root|g" "$UNIT_TEMPLATE" >"$UNIT_PATH"
+
+  systemctl_user daemon-reload
+  echo "Installed user service: $UNIT_PATH"
+}
+
+ttyd_asset_name() {
+  local arch="$1"
+  case "$arch" in
+    x86_64|amd64) echo "ttyd.x86_64" ;;
+    aarch64|arm64) echo "ttyd.aarch64" ;;
+    armv7l) echo "ttyd.armhf" ;;
+    armv6l|armv5l|arm) echo "ttyd.arm" ;;
+    *)
+      echo "Unsupported architecture for ttyd prebuilt binary: $arch" >&2
+      exit 1
+      ;;
+  esac
+}
+
+load_terminal_env() {
+  if [[ ! -f "$ENV_FILE" ]]; then
+    echo "Terminal env not found: $ENV_FILE" >&2
+    echo "Create it with: scripts/terminalctl init" >&2
+    exit 1
+  fi
+
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+}
+
+local_url() {
+  load_terminal_env
+  echo "http://127.0.0.1:${TERMINAL_PORT:-7681}"
+}
+
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "Missing required command: $1" >&2
+    exit 1
+  fi
+}
+
+systemctl_user() {
+  systemctl --user "$@"
+}
+
+main "$@"

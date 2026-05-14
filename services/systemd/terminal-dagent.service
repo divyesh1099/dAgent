@@ -1,0 +1,18 @@
+[Unit]
+Description=Hosted terminal for dAgent
+Documentation=file://{{DAGENT_ROOT}}/docs/hosted-terminal.md
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+EnvironmentFile=%h/.config/dagent/terminal.env
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStartPre=/usr/bin/test -x %h/.local/bin/ttyd
+ExecStart={{DAGENT_ROOT}}/scripts/launch_web_terminal.sh
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGINT
+
+[Install]
+WantedBy=default.target

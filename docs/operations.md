@@ -46,6 +46,13 @@ scripts/dagentctl logs main
 scripts/dagentctl health main
 ```
 
+For the hosted terminal:
+
+```bash
+scripts/terminalctl up
+scripts/terminalctl doctor
+```
+
 ## Health Checks
 
 n8n:
@@ -153,6 +160,20 @@ Use the token printed by:
 
 ```bash
 scripts/dagentctl dashboard main
+```
+
+## Hosted Terminal Public Hostname
+
+Use a separate protected hostname for the hosted shell:
+
+```text
+terminal.divyeshvishwakarma.com
+```
+
+The full setup and local service details live in:
+
+```text
+docs/hosted-terminal.md
 ```
 
 ## Logs
